@@ -1,0 +1,38 @@
+# H3 Prompt Writer (standalone fork) - Project aliases and functions
+# All commands defined here, sourced by .salias
+# Run 'help' to see all available commands
+
+# ── Environment ──
+set -gx H3_STANDALONE_PORT 8506
+
+# ── Help ──
+# Relative path: .salias_f is always sourced with the project dir as PWD.
+function help
+    clear
+    sed "s/H3_STANDALONE_PORT/$H3_STANDALONE_PORT/" ./.salias_help.txt
+end
+
+# ── Standalone app ──
+function install
+    if not test -x ./standalone/.venv/bin/python
+        python3 -m venv ./standalone/.venv
+    end
+    ./standalone/.venv/bin/python -m pip install --disable-pip-version-check -r ./standalone/requirements.txt
+end
+
+function run
+    ./standalone/start-linux.sh --port $H3_STANDALONE_PORT --no-browser
+end
+
+function runtests
+    echo "== standalone python suite =="
+    PYTHONPATH=standalone:standalone/h3_standalone/compat:. ./standalone/.venv/bin/python -m unittest discover -s standalone/tests -p "test_*.py"
+    echo "== extension python suite =="
+    PYTHONPATH=tests/ci_stubs python3 -m unittest discover -s tests -p "test_*.py"
+    echo "== standalone node suite =="
+    node --test standalone/tests/frontend.mjs
+end
+
+# ── Git (fork sync) ──
+# gitupdate is a single GLOBAL fish function (~/.config/fish/functions/gitupdate.fish).
+# Do not redefine it here - a local copy would shadow the global one and drift.

@@ -1,0 +1,9 @@
+H3 PROMPT WRITER (STANDALONE) - fork of duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer
+
+STANDALONE APP
+  install           create standalone/.venv and install its requirements
+  run               start the standalone app on port 8506
+  runtests          run the standalone + extension Python suites and Node suites
+
+GIT (fork sync)
+  gitupdate         ff main from upstream, rebase mryan on top, push both

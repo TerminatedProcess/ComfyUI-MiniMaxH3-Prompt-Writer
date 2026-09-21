@@ -405,6 +405,10 @@ def run_h3_pipeline(
             assembled["input"]["mode"],
             duration_seconds,
             camera_structure_allowed,
+            # Without this the repair is never verified: a turn fires to restore
+            # a dropped locked fact and the result is accepted unchecked, so a
+            # failed repair looks identical to a successful one.
+            bible=assembled["input"].get("bible"),
         )
         repaired_tags = reference_tags(repaired)
         repaired_audit["missing_reference_tags"] = sorted(expected_reference_tags - repaired_tags)

@@ -4,7 +4,12 @@ import re
 from typing import Any
 
 from .guides import MODE_GUIDES, guide_for_mode, load_guide, reference_base_excerpt
-from .scene_bible import SceneBibleError, locked_fields, validate as validate_bible
+from .scene_bible import (
+    SceneBibleError,
+    locked_fields,
+    render_constraints,
+    validate as validate_bible,
+)
 from .media import STORE, MediaError, parse_session_id
 from .references import canonical_reference_tags
 from .system_prompts import SystemPromptError, resolve_system_prompt
@@ -249,12 +254,24 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
         for asset in eligible
     ]
     references = "\n".join(_media_line(asset) for asset in declared_references) or "None"
+    # Locked facts must constrain generation, not merely grade it afterwards.
+    # Auditing alone was measured to fail: with the facts withheld from the
+    # request the model writes whatever the brief implies, and a single
+    # corrective turn cannot overturn a whole draft built on the wrong subject.
+    bible = _validated_bible(body)
+    established = render_constraints(bible) if bible else ""
+    established_block = (
+        "Established facts fixed by the user's reference media. Reproduce each one "
+        "faithfully; never substitute a different subject, wardrobe or setting for them:\n"
+        f"{established}\n\n"
+    ) if established else ""
     user_content = (
         f"Mode: {mode}\n"
         f"Duration: {duration:g} seconds\n"
         f"Aspect ratio: {aspect_ratio}\n\n"
         "Reference manifest (audio is not analyzed by the local model; derive its copy/reference role only from the user's words and do not invent its content):\n"
         f"{references}\n\n"
+        f"{established_block}"
         f"Creative brief:\n{brief}\n\n"
         f"{_final_contract(mode, brief)}"
     )

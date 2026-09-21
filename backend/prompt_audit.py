@@ -75,12 +75,16 @@ def audit_prompt(
     # "an adult male in his late 30s", every visual fact intact and the name
     # gone. Prompt wording cannot fix an intermittent fault; an audit can.
     locks = list(_lock_violations(bible, prompt)) if bible else []
+    # Carry the expected VALUE, not just the field name. A repair turn told
+    # only "subject went missing" cannot restore a fact it was never given.
+    lock_expected = {k: bible["fields"][k] for k in locks} if locks else {}
     if mode != "Reference":
         return {
             "mode": mode,
             "official_format_pass": None,
             "reference_understanding": "not_applicable",
             "lock_violations": locks,
+            "lock_expected": lock_expected,
             # Absent on this path until now, so the pipeline read it as falsy.
             # With no bible supplied it stays falsy and behaviour is unchanged.
             "repair_required": bool(locks),
@@ -172,6 +176,7 @@ def audit_prompt(
         "internal_video_representation_terms": internal_video_terms,
         "missing_dialogue_source": missing_dialogue_source,
         "lock_violations": locks,
+        "lock_expected": lock_expected,
         "repair_required": repair_required,
         "official_format_pass": (
             structure_pass

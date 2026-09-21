@@ -85,5 +85,30 @@ class RepairInstructionTests(unittest.TestCase):
         self.assertEqual(result["lock_violations"], [])
 
 
+
+class ExpectedValueTests(unittest.TestCase):
+    """A repair turn must be told the value, not just the field name."""
+
+    def test_audit_carries_the_expected_value(self):
+        result = audit_prompt(DROPPED, mode="I2VA", bible=locked_bible())
+        self.assertEqual(
+            result["lock_expected"]["subject"], "Bob, a man in a faded denim jacket"
+        )
+
+    def test_repair_instruction_quotes_the_value(self):
+        result = audit_prompt(DROPPED, mode="I2VA", bible=locked_bible())
+        message = audit_failures(result)[0]
+        self.assertIn("Bob, a man in a faded denim jacket", message)
+
+    def test_expected_is_empty_when_locks_hold(self):
+        result = audit_prompt(KEPT, mode="I2VA", bible=locked_bible())
+        self.assertEqual(result["lock_expected"], {})
+
+    def test_degrades_gracefully_without_expected_values(self):
+        # A caller assembling an audit dict by hand must not crash the repair path.
+        failures = audit_failures({"lock_violations": ["subject"]})
+        self.assertEqual(len(failures), 1)
+        self.assertIn("subject", failures[0])
+
 if __name__ == "__main__":
     unittest.main()

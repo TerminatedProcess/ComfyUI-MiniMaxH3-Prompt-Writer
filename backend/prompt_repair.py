@@ -69,12 +69,17 @@ def audit_failures(audit: dict[str, Any]) -> list[str]:
     if audit.get("missing_dialogue_source"):
         failures.append("dialogue without a stable speaker ID")
     if audit.get("lock_violations"):
-        # Named explicitly so the repair turn restores the established wording
-        # rather than inventing a fresh replacement for the dropped fact.
-        failures.append(
-            "dropped established facts the user's references fix: "
-            + ", ".join(audit["lock_violations"])
-        )
+        # The expected value is quoted verbatim so the repair turn restores the
+        # established fact rather than inventing a fresh replacement. Naming the
+        # field alone gives the model nothing to restore it from.
+        expected = audit.get("lock_expected") or {}
+        for field in audit["lock_violations"]:
+            value = expected.get(field)
+            failures.append(
+                f"dropped an established fact fixed by the user's reference - {field} must be: {value}"
+                if value else
+                f"dropped an established fact fixed by the user's reference: {field}"
+            )
     if audit.get("missing_reference_tags"):
         failures.append("generated draft is missing required reference tags: " + ", ".join(audit["missing_reference_tags"]))
     if audit.get("unexpected_reference_tags"):

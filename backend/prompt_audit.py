@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .scene_bible import lock_violations as _lock_violations
+
 
 REFERENCE_SECTIONS = (
     "subject_definitions",
@@ -64,12 +66,24 @@ def audit_prompt(
     mode: str = "Reference",
     duration_seconds: float | None = None,
     camera_structure_allowed: bool = True,
+    bible: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # Asset locks are checked in EVERY mode, unlike the reference-format rules
+    # below. A subject taken from an uploaded photo can drift out of an I2VA
+    # prompt exactly as easily as a Reference one, and that drift is intermittent
+    # -- observed in integration when the expander rendered a locked subject as
+    # "an adult male in his late 30s", every visual fact intact and the name
+    # gone. Prompt wording cannot fix an intermittent fault; an audit can.
+    locks = list(_lock_violations(bible, prompt)) if bible else []
     if mode != "Reference":
         return {
             "mode": mode,
             "official_format_pass": None,
             "reference_understanding": "not_applicable",
+            "lock_violations": locks,
+            # Absent on this path until now, so the pipeline read it as falsy.
+            # With no bible supplied it stays falsy and behaviour is unchanged.
+            "repair_required": bool(locks),
         }
     positions: dict[str, re.Match[str]] = {}
     for section in REFERENCE_SECTIONS:
@@ -131,6 +145,7 @@ def audit_prompt(
         quality_warnings.append("short detailed_description")
     repair_required = (
         not structure_pass
+        or bool(locks)
         or bool(invalid_timestamp_values)
         or bool(internal_video_terms)
         or missing_dialogue_source
@@ -156,9 +171,11 @@ def audit_prompt(
         "quality_warnings": quality_warnings,
         "internal_video_representation_terms": internal_video_terms,
         "missing_dialogue_source": missing_dialogue_source,
+        "lock_violations": locks,
         "repair_required": repair_required,
         "official_format_pass": (
             structure_pass
+            and not locks
             and not invalid_timestamp_values
             and not internal_video_terms
             and not missing_dialogue_source

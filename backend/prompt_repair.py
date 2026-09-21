@@ -68,6 +68,13 @@ def audit_failures(audit: dict[str, Any]) -> list[str]:
         failures.append("internal contact-sheet language")
     if audit.get("missing_dialogue_source"):
         failures.append("dialogue without a stable speaker ID")
+    if audit.get("lock_violations"):
+        # Named explicitly so the repair turn restores the established wording
+        # rather than inventing a fresh replacement for the dropped fact.
+        failures.append(
+            "dropped established facts the user's references fix: "
+            + ", ".join(audit["lock_violations"])
+        )
     if audit.get("missing_reference_tags"):
         failures.append("generated draft is missing required reference tags: " + ", ".join(audit["missing_reference_tags"]))
     if audit.get("unexpected_reference_tags"):

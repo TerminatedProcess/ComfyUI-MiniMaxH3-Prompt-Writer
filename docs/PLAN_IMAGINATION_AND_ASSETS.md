@@ -249,6 +249,34 @@ in a suit"), so `lock_violations` now requires every proper noun in a locked
 field to appear, independent of the ratio. This failure is intermittent, which
 is exactly why it needs the audit rather than prompt wording.
 
+### The intent resolver does not need to detect "the user said this"
+
+Measured: the model fills all seven fields reliably (6/6 parsed, 6/6 complete
+under JSON mode), but classifying which of them the *user* stated scored 0/6 —
+and failed by **under**-claiming, marking subject/action/location as invented for
+"Bob is sitting in his living room". A cite-the-evidence variant produced zero
+hallucinated quotes (every citation was a genuine substring) but still disagreed
+with the expected answer; on review **at least 3 of 6 of those disagreements
+were the test oracle being wrong**, not the model — "someone" really is a stated
+subject, "France" really is a stated location.
+
+Rather than keep tuning, check what consumes the flag. Only `ORIGIN_ASSET`
+branches on anything: `locked_fields` and the reference-image marker in
+`render_constraints`. `ORIGIN_USER` vs `ORIGIN_INVENTED` drives no behaviour.
+
+Critically, **cross-turn stability does not come from origin** — it comes from
+`render_constraints` restating every field as a constraint on every turn. A
+mis-flagged field is still stable. So:
+
+- **Asset origin is structural, not inferred.** A field is asset-derived because
+  it came out of analysing an uploaded image, which the pipeline knows for
+  certain. Never derive it from the text.
+- **User vs invented is cosmetic** — it colours the UI so the user can see what
+  was made up and push back on it. Approximate is good enough; do not spend
+  model calls perfecting it.
+
+This removes the resolver's hardest-looking requirement entirely.
+
 ## Built so far
 
 - `backend/scene_bible.py` — structured conversation state, pure (no host,

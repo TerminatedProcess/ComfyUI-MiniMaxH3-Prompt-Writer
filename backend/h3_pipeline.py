@@ -156,6 +156,7 @@ def _audit(
         assembled["input"]["mode"],
         duration_seconds,
         camera_structure_allowed,
+        bible=assembled["input"].get("bible"),
     )
     policy = reference_policy(assembled["input"])
     actual_reference_tags = reference_tags(prompt)
@@ -340,7 +341,12 @@ def run_h3_pipeline(
     format_repair_reason = None
     format_repair_failure = None
     format_repair_method = None
-    repair_needed = assembled["input"]["mode"] == "Reference" and initial_audit.get("repair_required") is True
+    # Previously gated on Reference, which left the other modes detected-but-not-
+    # repaired. Asset locks apply in every mode, so the gate is now the audit's
+    # own verdict. Non-Reference audits only set repair_required when a scene
+    # bible was supplied and a locked fact went missing, so a request without a
+    # bible reaches this line exactly as it did before.
+    repair_needed = initial_audit.get("repair_required") is True
     if repair_needed:
         format_repair_attempted = True
         failed_checks = audit_failures(initial_audit)

@@ -184,7 +184,15 @@ def lock_violations(bible: dict[str, Any], prose: str) -> tuple[str, ...]:
         if names - prose_tokens:
             missing.append(key)
             continue
+        # A surviving name is strong evidence the subject was not replaced, so
+        # the descriptive bar drops once every name is accounted for. Without
+        # this, a legitimate rewording trips the audit: "Bob, a man in his late
+        # 30s wearing a faded denim jacket" rendered as "Bob, his faded denim
+        # jacket damp, climbs the stairs" keeps 4 of 7 tokens (0.57) purely
+        # because the prose drops filler like "wearing" and "late". A false
+        # positive costs a repair turn that corrects nothing.
+        threshold = 0.35 if names else 0.6
         hits = len(wanted & prose_tokens)
-        if hits / len(wanted) < 0.6:
+        if hits / len(wanted) < threshold:
             missing.append(key)
     return tuple(missing)

@@ -179,6 +179,24 @@ class LockViolationTests(unittest.TestCase):
                  "faded denim jacket open at the collar.")
         self.assertEqual(lock_violations(b, prose), ())
 
+    def test_natural_rewording_that_keeps_the_name_passes(self):
+        # Regression: this exact pair was a false positive at a flat 0.6 ratio.
+        # The prose keeps the name and the jacket but drops filler ("wearing",
+        # "late", "30s"), scoring 4/7 = 0.57. A repair turn here fixes nothing.
+        b = bible_with(
+            subject=("Bob, a man in his late 30s wearing a faded denim jacket", ORIGIN_ASSET),
+        )
+        prose = "Bob, his faded denim jacket damp, climbs the spiral stairs at dawn."
+        self.assertEqual(lock_violations(b, prose), ())
+
+    def test_name_alone_is_not_enough(self):
+        # The relaxed bar must not let the subject be swapped out wholesale.
+        b = bible_with(
+            subject=("Bob, a man in his late 30s wearing a faded denim jacket", ORIGIN_ASSET),
+        )
+        prose = "Bob's golden retriever bounds across the wet sand chasing a gull."
+        self.assertEqual(lock_violations(b, prose), ("subject",))
+
     def test_field_without_proper_noun_still_uses_ratio(self):
         b = bible_with(location=("a cramped basement workshop", ORIGIN_ASSET))
         self.assertEqual(lock_violations(b, "A cramped basement workshop lit by one bulb."), ())

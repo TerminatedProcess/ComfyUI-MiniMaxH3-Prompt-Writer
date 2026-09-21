@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from .guides import MODE_GUIDES, guide_for_mode, load_guide, reference_base_excerpt
+from .scene_bible import SceneBibleError, locked_fields, validate as validate_bible
 from .media import STORE, MediaError, parse_session_id
 from .references import canonical_reference_tags
 from .system_prompts import SystemPromptError, resolve_system_prompt
@@ -21,6 +22,23 @@ class AssemblyError(Exception):
         self.code = code
         self.message = message
         self.details = details
+
+
+def _validated_bible(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the request's scene bible, or None when it carries no locks.
+
+    A malformed bible is rejected rather than ignored: silently dropping it
+    would disable asset locks without telling anyone, which is precisely the
+    silent-drift failure locks exist to prevent.
+    """
+    raw = body.get("bible")
+    if raw is None:
+        return None
+    try:
+        validate_bible(raw)
+    except SceneBibleError as error:
+        raise AssemblyError(error.code, error.message) from error
+    return raw if locked_fields(raw) else None
 
 
 def _required_text(body: dict[str, Any], key: str, label: str) -> str:
@@ -250,6 +268,11 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
             "aspect_ratio": aspect_ratio,
             "creative_brief": brief,
             "media_manifest": manifest,
+            # Optional. Present only once the conversational layer is driving the
+            # request; the audit uses it to verify that facts fixed by the user's
+            # reference images survived into the generated prompt. Absent means
+            # no locks, which is the pre-existing behaviour.
+            "bible": _validated_bible(body),
         },
         "media_inputs": media_inputs,
         "supporting_guides": ([{

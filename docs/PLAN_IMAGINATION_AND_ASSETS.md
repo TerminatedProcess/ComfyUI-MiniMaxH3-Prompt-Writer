@@ -277,6 +277,38 @@ mis-flagged field is still stable. So:
 
 This removes the resolver's hardest-looking requirement entirely.
 
+### Locks must constrain generation, not grade it
+
+The first implementation treated asset locks as a post-hoc audit. Measured live
+against the local model, that does not work: with the locked facts withheld from
+the request the model writes whatever the brief implies, and one corrective turn
+cannot overturn a draft already built on the wrong subject.
+
+| Configuration | Locked subject survived |
+|---|---|
+| Audited only | 0 / 3 runs |
+| + facts fed into the user message | 1 / 3 |
+| + coherent bible (as in real use) | 2 / 3 |
+
+The wardrobe detail survived every run; it is the **proper name** specifically
+that the model drops, which is why `lock_violations` treats names as
+all-or-nothing and why the repair turn is load-bearing rather than a formality.
+2/3 is the honest current figure — the mechanism detects and recovers, the
+underlying generation is not yet reliable enough to need no safety net.
+
+Two defects surfaced only by running the whole path, never by unit tests:
+
+- The **post-repair audit was called without the bible**, so a repair fired to
+  restore a dropped fact and its result was accepted unchecked. A failed repair
+  was indistinguishable from a successful one.
+- The repair instruction **named the field but not its value** — it asked the
+  model to restore a fact it had never been told. `lock_expected` now carries
+  the value and it is quoted verbatim in the instruction.
+
+Note for future work: the API response has **no `audit` key**. The audit dict is
+internal to the pipeline. Verify locks by re-running `lock_violations` against
+the returned prompt, not by reading a field off the response.
+
 ## Built so far
 
 - `backend/scene_bible.py` — structured conversation state, pure (no host,

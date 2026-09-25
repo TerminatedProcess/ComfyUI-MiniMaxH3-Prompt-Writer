@@ -3,7 +3,18 @@ import unittest
 from unittest.mock import patch
 
 from backend.models.contract import ModelError
-from backend.h3_pipeline import _audit
+from backend.h3_pipeline import _audit as _pipeline_audit
+from backend.references import reference_policy
+
+
+def _audit(prompt, assembled):
+    """Characterization shim.
+
+    The pipeline's audit now returns only the audit dict -- the reference policy
+    these tests assert on is read from the module that owns it. The assertions
+    below are unchanged.
+    """
+    return _pipeline_audit(prompt, assembled), reference_policy(assembled["input"])
 from backend.models.gguf_backend import GGUFBackend, _cancel_to_eos
 
 
@@ -478,7 +489,11 @@ class GenerationCharacterizationTests(unittest.TestCase):
         self.assertEqual(
             set(result),
             {
-                "prompt", "prompt_audit", "input_tokens", "output_tokens",
+                # negative_prompt, goals and goal_verification_tokens are part of
+                # the result for every target: Anima answers with two prompts, and
+                # every compile reports the standing goals it was checked against.
+                "prompt", "negative_prompt", "media_warnings", "goals", "goal_verification_tokens",
+                "prompt_audit", "input_tokens", "output_tokens",
                 "generation_seconds", "media_processing_seconds",
                 "visual_input_count", "video_frame_count", "video_sheet_count",
                 "vision_budget_applied", "estimated_input_tokens",

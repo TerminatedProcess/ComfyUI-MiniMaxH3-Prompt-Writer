@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from . import generic as generic_prompt
+from . import goals as goal_ledger
 from .guides import MODE_GUIDES, guide_for_mode, load_guide, reference_base_excerpt
 from .scene_bible import (
     SceneBibleError,
@@ -10,15 +12,107 @@ from .scene_bible import (
     render_constraints,
     validate as validate_bible,
 )
-from .media import STORE, MediaError, parse_session_id
+from .media import STORE, parse_session_id
 from .references import canonical_reference_tags
 from .system_prompts import SystemPromptError, resolve_system_prompt
+from .targets import TargetError, mode_spec, target_for_mode
 from .text_normalization import normalize_unicode_text
 
 
 ASPECT_RATIOS = {"1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"}
 CAPABILITY_BY_TYPE = {"image": "images", "video": "video_frames", "audio": "audio"}
 MUSIC3_MODE = "Music3"
+
+
+def _target(mode: str):
+    try:
+        return target_for_mode(mode)
+    except TargetError as error:
+        raise AssemblyError("INVALID_MODE", "The selected generation mode is not supported.") from error
+
+
+def _flags(body: dict[str, Any], mode: str) -> dict[str, Any]:
+    """Resolve Naughty, Story builder and the target's variant for this request.
+
+    Both flags default ON -- that is the product decision, and it is applied
+    here rather than in `system_prompt_for_mode` so the literal wrappers stay
+    the auditable baseline the flags edit.
+    """
+    target = _target(mode)
+    for key in ("nsfw", "story"):
+        if key in body and not isinstance(body[key], bool):
+            raise AssemblyError("INVALID_REQUEST", f"{key} must be a boolean.", {"field": key})
+    nsfw = bool(body.get("nsfw", True)) if target.declares("nsfw") else False
+    story = bool(body.get("story", True)) if target.declares("story") else False
+    variant = None
+    if target.variants:
+        requested = body.get("variant") or target.default_variant
+        if requested not in target.variants:
+            raise AssemblyError(
+                "INVALID_VARIANT",
+                f"{target.label} has no variant {requested!r}.",
+                {"variants": list(target.variants)},
+            )
+        variant = requested
+    elif body.get("variant"):
+        raise AssemblyError("INVALID_VARIANT", f"{target.label} has no variants.", {"field": "variant"})
+    return {"nsfw": nsfw, "story": story, "variant": variant}
+
+
+def _validated_generic(body: dict[str, Any]) -> dict[str, Any] | None:
+    """The generic prompt document, when the request is compiling one.
+
+    A malformed document is rejected rather than ignored: dropping it would
+    silently disable every lock it carries, which is the drift locks exist to
+    catch.
+    """
+    raw = body.get("generic")
+    if raw is None:
+        return None
+    try:
+        generic_prompt.validate(raw)
+    except generic_prompt.GenericError as error:
+        raise AssemblyError(error.code, error.message) from error
+    return None if generic_prompt.is_empty(raw) else raw
+
+
+def _validated_goals(body: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        return goal_ledger.validate(body.get("goals"))
+    except goal_ledger.GoalError as error:
+        raise AssemblyError(error.code, error.message) from error
+
+
+def _established_block(doc: dict[str, Any] | None, bible: dict[str, Any] | None) -> str:
+    """Facts the compile step must reproduce, restated in full every time."""
+    established = ""
+    if doc is not None:
+        established = generic_prompt.render_constraints(doc)
+    elif bible is not None:
+        established = render_constraints(bible)
+    if not established:
+        return ""
+    return (
+        "Established facts fixed by the user's reference media and their own words. Reproduce each one "
+        "faithfully; never substitute a different subject, wardrobe or setting for them:\n"
+        f"{established}\n\n"
+    )
+
+
+def _goal_block(goals: list[dict[str, Any]]) -> str:
+    """Standing goals, injected into every compile -- not just the turn they were set.
+
+    A goal that only applied to the turn that created it is not a goal; it is a
+    one-off patch the user has to keep repeating for every model.
+    """
+    rendered = goal_ledger.render(goals)
+    if not rendered:
+        return ""
+    return (
+        "Standing goals from the user. Every one of them must hold in this prompt; they outrank your own "
+        "judgement and any default:\n"
+        f"{rendered}\n\n"
+    )
 
 
 class AssemblyError(Exception):
@@ -66,9 +160,20 @@ def _media_line(asset: dict[str, Any]) -> str:
     return f"{asset.get('reference', asset['filename'])}: {asset['filename']} ({detail})"
 
 
-def _effective_system_prompt(body: dict[str, Any], mode: str) -> tuple[str, bool]:
+def _effective_system_prompt(
+    body: dict[str, Any],
+    mode: str,
+    flags: dict[str, Any] | None = None,
+) -> tuple[str, bool]:
+    resolved = flags or {"nsfw": False, "story": False, "variant": None}
     try:
-        return resolve_system_prompt(mode, body.get("system_prompt_override"))
+        return resolve_system_prompt(
+            mode,
+            body.get("system_prompt_override"),
+            nsfw=bool(resolved.get("nsfw")),
+            story=bool(resolved.get("story")),
+            variant=resolved.get("variant"),
+        )
     except SystemPromptError as error:
         raise AssemblyError(error.code, error.message) from error
 
@@ -114,14 +219,38 @@ def _validated_music_caption_context(source: dict[str, Any]) -> tuple[str, str]:
     return brief, lyrics
 
 
+GUIDE_MESSAGE_NAMES = {
+    "base": "official_minimax_h3_guide",
+    "reference": "official_minimax_h3_guide",
+    "krea2": "official_krea2_prompting_guide",
+    "krea2_expansion": "official_krea2_expansion_instructions",
+    "anima": "official_anima_prompting_rules",
+}
+
+
+def _guide_content(guide_id: str) -> str:
+    """The text of one guide, excerpted where the whole file would be waste."""
+    from .guides import anima_prompting_excerpt, krea2_examples_excerpt
+
+    if guide_id == "krea2":
+        return krea2_examples_excerpt()
+    if guide_id == "anima":
+        return anima_prompting_excerpt()
+    return load_guide(guide_id)["content"]
+
+
 def _guide_messages(mode: str, system_prompt: str) -> list[dict[str, str]]:
     if mode == MUSIC3_MODE:
         return ([{"role": "system", "name": "music3_caption_contract", "content": system_prompt}] if system_prompt else [])
-    guide = guide_for_mode(mode)
     messages = []
     if system_prompt:
         messages.append({"role": "system", "name": "prompt_studio_system_prompt", "content": system_prompt})
-    messages.append({"role": "system", "name": "official_minimax_h3_guide", "content": guide["content"]})
+    for guide_id in mode_spec(mode).guide_ids:
+        messages.append({
+            "role": "system",
+            "name": GUIDE_MESSAGE_NAMES.get(guide_id, f"official_{guide_id}_guide"),
+            "content": _guide_content(guide_id),
+        })
     if mode == "Reference":
         messages.append({
             "role": "system",
@@ -175,10 +304,122 @@ def _final_contract(mode: str, task_text: str) -> str:
     )
 
 
+def _media_inputs(assets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "asset_id": asset["id"],
+            "reference": asset.get("reference"),
+            "type": asset["type"],
+            "requires_capability": CAPABILITY_BY_TYPE[asset["type"]],
+            "frames": [
+                {"timestamp": frame["timestamp"], "content_url": frame["url"]}
+                for frame in asset.get("frames", [])
+            ],
+            "content_url": asset["content_url"],
+            "visual_width": (
+                asset.get("prepared_width") if asset["type"] == "image" else asset.get("contact_sheet_width")
+            ),
+            "visual_height": (
+                asset.get("prepared_height") if asset["type"] == "image" else asset.get("contact_sheet_height")
+            ),
+        }
+        for asset in assets
+        if asset["type"] != "audio"
+    ]
+
+
+def _session_manifest(body: dict[str, Any], mode: str, session_id: str) -> dict[str, Any]:
+    """The manifest for this compile.
+
+    `session_media` is what the two-pane studio sends: media belongs to the
+    session, so it is stored once and projected onto whichever mode is being
+    compiled. Without the flag this is the original per-mode manifest, which is
+    what the node's own UI and the existing tests use.
+    """
+    if body.get("session_media"):
+        return STORE.view(session_id, mode)
+    return STORE.manifest(session_id, mode)
+
+
+def _image_request(body: dict[str, Any], mode: str, flags: dict[str, Any]) -> dict[str, Any]:
+    """Krea 2 and Anima: a still, compiled from the generic prompt or a brief.
+
+    No duration, no reference tags, no soundscape. References are read by the
+    prompt model to describe what it sees; the image model itself receives only
+    text, so nothing here has to survive as a `<Picture N>` binding.
+    """
+    target = _target(mode)
+    system_prompt, system_prompt_custom = _effective_system_prompt(body, mode, flags)
+    doc = _validated_generic(body)
+    goals = _validated_goals(body)
+    brief = normalize_unicode_text(str(body.get("creative_brief") or "")).strip()
+    if len(brief) > target.brief_limit:
+        raise AssemblyError("BRIEF_TOO_LONG", f"Creative brief cannot exceed {target.brief_limit:,} characters.")
+    if not brief and doc is None:
+        raise AssemblyError("INVALID_REQUEST", "Creative brief is required.", {"field": "creative_brief"})
+    aspect_ratio = None
+    if target.declares("aspect_ratio") and body.get("aspect_ratio"):
+        aspect_ratio = _required_text(body, "aspect_ratio", "Aspect ratio")
+        if aspect_ratio not in ASPECT_RATIOS:
+            raise AssemblyError("INVALID_ASPECT_RATIO", "The selected aspect ratio is not supported.")
+    try:
+        session_id = parse_session_id(body.get("session_id"))
+    except ValueError as error:
+        raise AssemblyError("INVALID_SESSION", "The media session ID is invalid.") from error
+
+    manifest = _session_manifest(body, mode, session_id)
+    if not manifest["valid"]:
+        raise AssemblyError("INVALID_MEDIA_MANIFEST", "The media manifest is not valid.", manifest["violations"])
+    references = "\n".join(_media_line(asset) for asset in manifest["assets"]) or "None"
+    generic_block = f"Generic prompt:\n{generic_prompt.render(doc)}\n\n" if doc is not None else ""
+    brief_block = f"Creative brief:\n{brief}\n\n" if brief else ""
+    variant_line = f"Variant: {flags['variant']}\n" if flags.get("variant") else ""
+    user_content = (
+        f"Target: {target.label}\n"
+        f"{variant_line}"
+        + (f"Aspect ratio: {aspect_ratio}\n" if aspect_ratio else "")
+        + "\nReference media (describe what it actually shows; it is not attached to the image model):\n"
+        f"{references}\n\n"
+        f"{_established_block(doc, None)}"
+        f"{_goal_block(goals)}"
+        f"{generic_block}"
+        f"{brief_block}"
+        + target.final_contract(mode, brief, story=bool(flags.get("story")))
+    )
+    return {
+        "schema_version": 1,
+        "guide": {key: value for key, value in load_guide(mode_spec(mode).guide_ids[0]).items() if key != "content"},
+        "input": {
+            "mode": mode,
+            "duration_seconds": None,
+            "aspect_ratio": aspect_ratio,
+            "creative_brief": brief,
+            "media_manifest": manifest,
+            "generic": doc,
+            "goals": goals,
+            # References this mode cannot use were dropped from the view; the
+            # user needs to hear that rather than wonder why their picture had
+            # no effect.
+            "media_warnings": [item["message"] for item in manifest.get("warnings", [])],
+            **flags,
+        },
+        "media_inputs": _media_inputs(manifest["assets"]),
+        "supporting_guides": [
+            {key: value for key, value in load_guide(guide_id).items() if key != "content"}
+            for guide_id in mode_spec(mode).guide_ids[1:]
+        ],
+        "system_prompt": {"custom": system_prompt_custom, "content": system_prompt},
+        "messages": _guide_messages(mode, system_prompt) + [{"role": "user", "content": user_content}],
+    }
+
+
 def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
     mode = _required_text(body, "mode", "Mode")
+    flags = _flags(body, mode)
+    if _target(mode).workspace == "image":
+        return _image_request(body, mode, flags)
     if mode == MUSIC3_MODE:
-        system_prompt, system_prompt_custom = _effective_system_prompt(body, mode)
+        system_prompt, system_prompt_custom = _effective_system_prompt(body, mode, flags)
         brief, lyrics = _validated_music_caption_context(body)
         try:
             session_id = parse_session_id(body.get("session_id"))
@@ -198,6 +439,7 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
                 "creative_brief": brief,
                 "lyrics": lyrics,
                 "media_manifest": {"session_id": session_id, "mode": mode, "assets": [], "valid": True},
+                **flags,
             },
             "media_inputs": [],
             "supporting_guides": [],
@@ -206,8 +448,14 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
         }
     if mode not in MODE_GUIDES:
         raise AssemblyError("INVALID_MODE", "The selected MiniMax mode is not supported.")
-    system_prompt, system_prompt_custom = _effective_system_prompt(body, mode)
-    brief = _required_text(body, "creative_brief", "Creative brief")
+    system_prompt, system_prompt_custom = _effective_system_prompt(body, mode, flags)
+    doc = _validated_generic(body)
+    # With a generic prompt driving the compile the brief is optional: the
+    # document already carries everything it was built from, and demanding a
+    # brief as well would reject the studio's own request.
+    brief = normalize_unicode_text(str(body.get("creative_brief") or "")).strip()
+    if not brief and doc is None:
+        raise AssemblyError("INVALID_REQUEST", "Creative brief is required.", {"field": "creative_brief"})
     if len(brief) > 8000:
         raise AssemblyError("BRIEF_TOO_LONG", "Creative brief cannot exceed 8,000 characters.")
 
@@ -222,49 +470,21 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
     except ValueError as error:
         raise AssemblyError("INVALID_SESSION", "The media session ID is invalid.") from error
 
-    manifest = STORE.manifest(session_id, mode)
+    manifest = _session_manifest(body, mode, session_id)
     if not manifest["valid"]:
         raise AssemblyError("INVALID_MEDIA_MANIFEST", "The media manifest is not valid.", manifest["violations"])
 
     _validate_reference_tags(brief, manifest, mode, "Creative Brief")
     declared_references = manifest["assets"]
-    eligible = [asset for asset in declared_references if asset["type"] != "audio"]
-    media_inputs = [
-        {
-            "asset_id": asset["id"],
-            "reference": asset.get("reference"),
-            "type": asset["type"],
-            "requires_capability": CAPABILITY_BY_TYPE[asset["type"]],
-            "frames": [
-                {"timestamp": frame["timestamp"], "content_url": frame["url"]}
-                for frame in asset.get("frames", [])
-            ],
-            "content_url": asset["content_url"],
-            "visual_width": (
-                asset.get("prepared_width")
-                if asset["type"] == "image"
-                else asset.get("contact_sheet_width")
-            ),
-            "visual_height": (
-                asset.get("prepared_height")
-                if asset["type"] == "image"
-                else asset.get("contact_sheet_height")
-            ),
-        }
-        for asset in eligible
-    ]
+    media_inputs = _media_inputs(declared_references)
     references = "\n".join(_media_line(asset) for asset in declared_references) or "None"
     # Locked facts must constrain generation, not merely grade it afterwards.
     # Auditing alone was measured to fail: with the facts withheld from the
     # request the model writes whatever the brief implies, and a single
     # corrective turn cannot overturn a whole draft built on the wrong subject.
     bible = _validated_bible(body)
-    established = render_constraints(bible) if bible else ""
-    established_block = (
-        "Established facts fixed by the user's reference media. Reproduce each one "
-        "faithfully; never substitute a different subject, wardrobe or setting for them:\n"
-        f"{established}\n\n"
-    ) if established else ""
+    goals = _validated_goals(body)
+    established_block = _established_block(doc, bible)
     user_content = (
         f"Mode: {mode}\n"
         f"Duration: {duration:g} seconds\n"
@@ -272,8 +492,9 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
         "Reference manifest (audio is not analyzed by the local model; derive its copy/reference role only from the user's words and do not invent its content):\n"
         f"{references}\n\n"
         f"{established_block}"
-        f"Creative brief:\n{brief}\n\n"
-        f"{_final_contract(mode, brief)}"
+        f"{_goal_block(goals)}"
+        + (f"Creative brief:\n{brief}\n\n" if brief else "")
+        + _final_contract(mode, brief)
     )
     guide = guide_for_mode(mode)
     return {
@@ -289,7 +510,16 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
             # request; the audit uses it to verify that facts fixed by the user's
             # reference images survived into the generated prompt. Absent means
             # no locks, which is the pre-existing behaviour.
-            "bible": _validated_bible(body),
+            "bible": bible,
+            # The generic prompt document and the standing goal ledger, when the
+            # two-pane studio is driving. Both are checked after generation.
+            "generic": doc,
+            "goals": goals,
+            # References this mode cannot use were dropped from the view; the
+            # user needs to hear that rather than wonder why their picture had
+            # no effect.
+            "media_warnings": [item["message"] for item in manifest.get("warnings", [])],
+            **flags,
         },
         "media_inputs": media_inputs,
         "supporting_guides": ([{
@@ -300,11 +530,76 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _image_refinement(body: dict[str, Any], mode: str, flags: dict[str, Any]) -> dict[str, Any]:
+    """Revise a still's prompt. Same contract as building one, plus the draft.
+
+    Kept separate from the H3 path because that one demands a duration, binds
+    `<Audio N>` reference semantics and asks the model for "the complete revised
+    H3 prompt" -- instructions that make no sense for a Krea 2 paragraph and that
+    its own audit then rejects.
+    """
+    target = _target(mode)
+    system_prompt, system_prompt_custom = _effective_system_prompt(body, mode, flags)
+    current_prompt = _required_text(body, "current_prompt", "Current prompt")
+    instruction = _required_text(body, "instruction", "Revision instruction")
+    if len(current_prompt) > 20_000:
+        raise AssemblyError("PROMPT_TOO_LONG", "The current prompt cannot exceed 20,000 characters.")
+    if len(instruction) > 2_000:
+        raise AssemblyError("INSTRUCTION_TOO_LONG", "The revision instruction cannot exceed 2,000 characters.")
+    try:
+        session_id = parse_session_id(body.get("session_id"))
+    except ValueError as error:
+        raise AssemblyError("INVALID_SESSION", "The media session ID is invalid.") from error
+    doc = _validated_generic(body)
+    goals = _validated_goals(body)
+    brief = normalize_unicode_text(str(body.get("creative_brief") or "")).strip()
+    manifest = _session_manifest(body, mode, session_id)
+    variant_line = f"Variant: {flags['variant']}\n" if flags.get("variant") else ""
+    user_content = (
+        f"Revise the current {target.label} prompt according to the revision instruction. "
+        "Return only the complete revised prompt in the required shape. Do not discuss the changes.\n\n"
+        f"Target: {target.label}\n"
+        f"{variant_line}\n"
+        f"{_established_block(doc, None)}"
+        f"{_goal_block(goals)}"
+        + (f"Original brief:\n{brief}\n\n" if brief else "")
+        + f"Current prompt:\n{current_prompt}\n\n"
+        f"Revision instruction:\n{instruction}\n\n"
+        + target.final_contract(mode, instruction, story=bool(flags.get("story")))
+    )
+    return {
+        "schema_version": 1,
+        "guide": {key: value for key, value in load_guide(mode_spec(mode).guide_ids[0]).items() if key != "content"},
+        "input": {
+            "mode": mode,
+            "duration_seconds": None,
+            "aspect_ratio": None,
+            "creative_brief": brief,
+            "current_prompt": current_prompt,
+            "instruction": instruction,
+            "media_manifest": manifest,
+            "generic": doc,
+            "goals": goals,
+            **flags,
+        },
+        "media_inputs": [],
+        "supporting_guides": [
+            {key: value for key, value in load_guide(guide_id).items() if key != "content"}
+            for guide_id in mode_spec(mode).guide_ids[1:]
+        ],
+        "system_prompt": {"custom": system_prompt_custom, "content": system_prompt},
+        "messages": _guide_messages(mode, system_prompt) + [{"role": "user", "content": user_content}],
+    }
+
+
 def assemble_refinement(
     body: dict[str, Any],
     cached_generation: dict[str, Any] | None,
 ) -> dict[str, Any]:
     mode = _required_text(body, "mode", "Mode")
+    flags = _flags(body, mode)
+    if _target(mode).workspace == "image":
+        return _image_refinement(body, mode, flags)
     if mode == MUSIC3_MODE:
         system_prompt, system_prompt_custom = _effective_system_prompt(body, mode)
         current_prompt = _required_text(body, "current_prompt", "Current caption")
@@ -345,7 +640,7 @@ def assemble_refinement(
         }
     if mode not in MODE_GUIDES:
         raise AssemblyError("INVALID_MODE", "The selected MiniMax mode is not supported.")
-    system_prompt, system_prompt_custom = _effective_system_prompt(body, mode)
+    system_prompt, system_prompt_custom = _effective_system_prompt(body, mode, flags)
     current_prompt = _required_text(body, "current_prompt", "Current prompt")
     instruction = _required_text(body, "instruction", "Revision instruction")
     if len(current_prompt) > 20_000:
@@ -357,7 +652,7 @@ def assemble_refinement(
     except ValueError as error:
         raise AssemblyError("INVALID_SESSION", "The media session ID is invalid.") from error
 
-    manifest = STORE.manifest(session_id, mode)
+    manifest = _session_manifest(body, mode, session_id)
     if not manifest["valid"]:
         raise AssemblyError("INVALID_MEDIA_MANIFEST", "The media manifest is not valid.", manifest["violations"])
     context_source = cached_generation if cached_generation and cached_generation.get("mode") == mode else body
@@ -366,6 +661,11 @@ def assemble_refinement(
     _validate_reference_tags(instruction, manifest, mode, "Revision instruction")
     references = "\n".join(_media_line(asset) for asset in manifest["assets"]) or "None"
     guide = guide_for_mode(mode)
+    # A revision is held to the same established facts and standing goals as the
+    # generation was; without them a rewrite can drift the locked subject and
+    # nothing downstream notices.
+    doc = _validated_generic(body)
+    goals = _validated_goals(body)
     user_content = (
         "Rewrite the current H3 prompt according to the revision instruction. "
         "Return only the complete revised H3 prompt. Do not discuss the changes.\n\n"
@@ -374,6 +674,8 @@ def assemble_refinement(
         f"Original aspect ratio: {aspect_ratio}\n"
         f"Original Creative Brief:\n{creative_brief}\n\n"
         f"Reference manifest (text only; media is intentionally not attached):\n{references}\n\n"
+        f"{_established_block(doc, None)}"
+        f"{_goal_block(goals)}"
         f"Current prompt:\n{current_prompt}\n\n"
         f"Revision instruction:\n{instruction}\n\n"
         "Reference revision rule: preserve each existing <Audio N> that is absent from the Revision instruction. "
@@ -393,6 +695,9 @@ def assemble_refinement(
             "current_prompt": current_prompt,
             "instruction": instruction,
             "media_manifest": manifest,
+            "generic": doc,
+            "goals": goals,
+            **flags,
         },
         "media_inputs": [],
         "supporting_guides": ([{

@@ -19,19 +19,40 @@ class SystemPromptError(ValueError):
         self.message = message
 
 
-def system_prompt_for_mode(mode: str) -> str:
-    if mode not in {"T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3", "Music3Lyrics"}:
-        raise SystemPromptError("INVALID_MODE", "The selected MiniMax mode is not supported.")
-    if mode == "Music3Lyrics":
-        return MUSIC3_LYRICS_SYSTEM_WRAPPER
-    if mode == "Music3":
-        return MUSIC3_SYSTEM_WRAPPER
-    return REFERENCE_SYSTEM_WRAPPER if mode == "Reference" else SYSTEM_WRAPPER
+def system_prompt_for_mode(
+    mode: str,
+    *,
+    nsfw: bool = False,
+    story: bool = False,
+    variant: str | None = None,
+) -> str:
+    """The contract for one mode, composed from the flags in force.
+
+    Flags default OFF here so this function keeps returning the literal wrappers
+    above -- they are the baseline the flags edit, and a test can hold them to
+    the byte. Runtime callers pass the request's actual flags; the UI defaults
+    both to on.
+    """
+    # Imported here: the registry imports this module for its wrappers, so a
+    # top-level import would be circular.
+    from .targets import TargetError, system_prompt_for
+
+    try:
+        return system_prompt_for(mode, nsfw=nsfw, story=story, variant=variant)
+    except TargetError as error:
+        raise SystemPromptError("INVALID_MODE", "The selected generation mode is not supported.") from error
 
 
-def resolve_system_prompt(mode: str, override: Any = None) -> tuple[str, bool]:
+def resolve_system_prompt(
+    mode: str,
+    override: Any = None,
+    *,
+    nsfw: bool = False,
+    story: bool = False,
+    variant: str | None = None,
+) -> tuple[str, bool]:
     if override is None:
-        return system_prompt_for_mode(mode), False
+        return system_prompt_for_mode(mode, nsfw=nsfw, story=story, variant=variant), False
     if not isinstance(override, str):
         raise SystemPromptError("INVALID_SYSTEM_PROMPT", "System Prompt must be text or null.")
     if len(override) > MAX_SYSTEM_PROMPT_CHARS:

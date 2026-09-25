@@ -4,6 +4,7 @@ import { aspectRatioMarkup, splitMenuMarkup } from "../web/writer_controls.js";
 import './media_visual.mjs';
 import './sequence.mjs';
 import "./writer_async.mjs";
+import "./writer_stage.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -1063,7 +1064,7 @@ test("External queue handoff waits for exact unloaded status and fails closed on
   }),error=>error.code==='WRITER_UNLOAD_FAILED');
 });
 
-test("text-only Direct models expose T2VA and Music3", () => {
+test("text-only Direct models are limited by attachments, not by mode", () => {
   const textOnly = {
     id: "direct-text-only",
     family: "gguf",
@@ -1078,14 +1079,17 @@ test("text-only Direct models expose T2VA and Music3", () => {
   };
 
   assert.equal(isTextOnlyDirectModel(textOnly), true);
-  assert.equal(isGenerationModeAvailable(textOnly, "T2VA"), true);
-  assert.equal(isGenerationModeAvailable(textOnly, "Music3"), true);
-  for (const mode of ["I2VA", "FL2VA", "L2VA", "Reference"]) {
-    assert.equal(isGenerationModeAvailable(textOnly, mode), false);
+  // Nothing attached: a text-only model can write any target's prompt from text.
+  for (const mode of ["T2VA", "Music3", "I2VA", "FL2VA", "L2VA", "Reference", "Krea2", "Anima"]) {
+    assert.equal(isGenerationModeAvailable(textOnly, mode, 0), true, mode);
+  }
+  // With references attached it cannot look at them, whatever the mode.
+  for (const mode of ["I2VA", "Reference", "Krea2"]) {
+    assert.equal(isGenerationModeAvailable(textOnly, mode, 1), false, mode);
   }
   assert.equal(isTextOnlyDirectModel(vision), false);
-  assert.equal(isGenerationModeAvailable(vision, "Reference"), true);
-  assert.equal(isGenerationModeAvailable({ family: "external", capabilities: { images: false } }, "Reference"), true);
+  assert.equal(isGenerationModeAvailable(vision, "Reference", 3), true);
+  assert.equal(isGenerationModeAvailable({ family: "external", capabilities: { images: false } }, "Reference", 2), true);
 });
 
 test("Generate and Refine payloads are built from state rather than Settings DOM", () => {

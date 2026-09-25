@@ -459,15 +459,19 @@ class GGUFBackend:
                     seed: int | None,
                     thinking: bool,
                     purpose: str,
+                    structured: bool = False,
                 ) -> dict[str, Any]:
                     fallback_sampling = {
                         "temperature": temperature,
                         "top_p": top_p,
                         "top_k": top_k,
                     }
+                    # The model policy tunes prose writing. A request that asked
+                    # for its own sampling did so because it needs JSON back, and
+                    # the policy's creative values break that.
                     sampling = (
                         sampling_options(model_info, thinking=thinking, fallback=fallback_sampling)
-                        if purpose == "generation"
+                        if purpose == "generation" and not structured
                         else fallback_sampling
                     )
                     options = {

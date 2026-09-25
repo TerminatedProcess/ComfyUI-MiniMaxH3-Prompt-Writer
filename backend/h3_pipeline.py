@@ -10,18 +10,10 @@ from .context import (
     estimate_visual_tokens,
     non_thinking_output_tokens,
 )
+from . import goals as goal_ledger
 from .media import STORE, MediaError
 from .models.contract import ModelError, final_message_text
-from .prompt_audit import audit_prompt, camera_structure_requested
-from .prompt_repair import (
-    audit_failures,
-    dialogue_lines,
-    explicit_constraint_violations,
-    multimodal_repair_messages,
-    narrow_repair_messages,
-    unexpected_audio_task,
-)
-from .references import ReferencePolicy, reference_policy, reference_tags
+from .targets import TargetError, mode_limits, target_for_mode
 
 def _asset_data_uri(session_id: str, asset_id: str, representation: str) -> str:
     try:
@@ -140,62 +132,50 @@ def _messages(
     }
 
 
-def _audit(
-    prompt: str,
-    assembled: dict[str, Any],
-) -> tuple[dict[str, Any], ReferencePolicy, str, float | None, bool]:
-    duration_seconds = assembled["input"].get("duration_seconds")
-    intent_text = "\n".join(
-        str(assembled["input"].get(key, ""))
-        for key in ("creative_brief", "current_prompt", "instruction")
-        if assembled["input"].get(key)
-    )
-    camera_structure_allowed = camera_structure_requested(intent_text)
-    result = audit_prompt(
-        prompt,
-        assembled["input"]["mode"],
-        duration_seconds,
-        camera_structure_allowed,
-        bible=assembled["input"].get("bible"),
-    )
-    policy = reference_policy(assembled["input"])
-    actual_reference_tags = reference_tags(prompt)
-    missing_reference_tags = sorted(policy.required - actual_reference_tags)
-    unexpected_reference_tags = sorted(actual_reference_tags - policy.allowed)
-    has_unexpected_audio_task = unexpected_audio_task(result.get("task_label"), actual_reference_tags)
-    constraint_violations = explicit_constraint_violations(intent_text, prompt)
-    if assembled["input"]["mode"] == "Reference":
-        result["missing_reference_tags"] = missing_reference_tags
-        result["unexpected_reference_tags"] = unexpected_reference_tags
-        result["required_reference_tags"] = sorted(policy.required)
-        result["mutable_reference_tags"] = sorted(policy.mutable)
-        result["allowed_reference_tags"] = sorted(policy.allowed)
-        result["unexpected_audio_task"] = has_unexpected_audio_task
-        result["explicit_constraint_violations"] = constraint_violations
-        result["repair_required"] = bool(
-            result.get("repair_required")
-            or missing_reference_tags
-            or unexpected_reference_tags
-            or has_unexpected_audio_task
-            or constraint_violations
-        )
-    return result, policy, intent_text, duration_seconds, camera_structure_allowed
+def _target(assembled: dict[str, Any]):
+    mode = assembled.get("input", {}).get("mode")
+    try:
+        return target_for_mode(mode)
+    except TargetError as error:
+        raise ModelError("INVALID_MODE", "The selected generation mode is not supported.", {"mode": mode}) from error
+
+
+def _audit(prompt: str, assembled: dict[str, Any]) -> dict[str, Any]:
+    """Audit the draft the way its own target is audited.
+
+    H3 checks official sections and reference inventory; Krea 2 checks that the
+    result is one paragraph of prose; Anima checks tag order and the variant's
+    score-tag rule. All of them additionally check that facts established in the
+    generic prompt survived and that every standing goal still holds.
+    """
+    return _target(assembled).audit(prompt, assembled)
+
+
+def _text_only_modes() -> list[str]:
+    return sorted(mode for mode, limits in mode_limits().items() if not limits)
 
 
 def validate_media_capabilities(model_info: dict[str, Any], assembled: dict[str, Any]) -> None:
     mode = assembled.get("input", {}).get("mode")
+    has_visual_request = any(
+        item.get("type") in {"image", "video"} for item in assembled.get("media_inputs", [])
+    )
     if (
         model_info.get("family") == "gguf"
         and model_info.get("capabilities", {}).get("images") is False
-        and mode not in {"T2VA", "Music3"}
+        and has_visual_request
     ):
+        # Gated on the actual attachments rather than on the mode: a text-only
+        # model can write any target's prompt, it just cannot look at pictures.
+        supported = _text_only_modes()
         raise ModelError(
             "DIRECT_VISION_REQUIRED",
-            "This Direct GGUF model is running without a compatible vision projector. T2VA and Music3 are available.",
+            "This Direct GGUF model is running without a compatible vision projector. "
+            "Modes that take no reference media are available: " + ", ".join(supported) + ".",
             {
                 "mode": mode,
-                "supported_modes": ["T2VA", "Music3"],
-                "suggestion": "Switch to T2VA or Music3, or add the matching mmproj GGUF beside the model.",
+                "supported_modes": supported,
+                "suggestion": "Remove the attached references, or add the matching mmproj GGUF beside the model.",
             },
         )
     required = {item["requires_capability"] for item in assembled["media_inputs"]}
@@ -244,11 +224,20 @@ def run_h3_pipeline(
     if on_phase:
         on_phase("generating")
     generation_started = time.perf_counter()
+    # Prompt writing is creative sampling; a JSON contract is not. The generic
+    # stages ask for lower temperature because a document that stops mid-string
+    # is a total loss, and the creativity belongs in the field values, not in
+    # whether the object closes.
+    sampling = {"temperature": 1.0, "top_p": 0.95, "top_k": 64, **(assembled.get("sampling") or {})}
     response = complete(
         messages=messages,
-        temperature=1.0,
-        top_p=0.95,
-        top_k=64,
+        temperature=sampling["temperature"],
+        top_p=sampling["top_p"],
+        top_k=sampling["top_k"],
+        # A Direct GGUF model policy owns sampling for prompt writing, but not
+        # for a JSON contract: `structured` tells the backend this request chose
+        # its own values on purpose.
+        structured=bool(assembled.get("sampling")),
         max_tokens=runtime_plan["max_output_tokens"],
         seed=seed,
         thinking=thinking,
@@ -327,54 +316,69 @@ def run_h3_pipeline(
                 "media_processing_seconds": round(media_processing_seconds, 3), **media_metrics,
                 "thinking_fallback": False, "format_repair_attempted": False,
                 "primary_finish_reason": primary_finish_reason, "seed": seed}
-    initial_audit, reference_policy_value, intent_text, duration_seconds, camera_structure_allowed = _audit(
-        prompt,
-        assembled,
-    )
-    expected_reference_tags = reference_policy_value.required
-    allowed_reference_tags = reference_policy_value.allowed
-    initial_reference_tags = reference_tags(prompt)
-    repair_reference_tags = (initial_reference_tags & allowed_reference_tags) | expected_reference_tags
+    target = _target(assembled)
+    initial_audit = _audit(prompt, assembled)
+    # A judged goal cannot be checked by inspection, so it gets a verifier pass.
+    # Unverifiable is NOT the same as met: a goal whose verdict never arrives
+    # stays pending and is reported as such.
+    def verify_pending_goals(audit: dict[str, Any], text: str) -> int:
+        """Resolve the audit's pending judged goals against `text`. Returns tokens."""
+        pending_ids = set(audit.get("goals_pending") or [])
+        if not pending_ids or is_cancelled():
+            return 0
+        pending = [goal for goal in (audit.get("goals") or []) if goal["id"] in pending_ids]
+        output_limit = runtime_plan.get("max_output_tokens")
+        verify_response = complete(
+            messages=goal_ledger.verify_messages(pending, text),
+            temperature=0.0,
+            top_p=0.9,
+            top_k=40,
+            # The external llama.cpp backend leaves the output limit to the
+            # server, so this is None there; a verdict is two lines either way.
+            max_tokens=min(768, int(output_limit)) if isinstance(output_limit, int) and output_limit > 0 else 768,
+            seed=seed,
+            thinking=False,
+            purpose="verify",
+        )
+        verify_usage = verify_response.get("usage", {})
+        spent = int(verify_usage.get("completion_tokens", 0))
+        usage["prompt_tokens"] = int(usage.get("prompt_tokens", 0)) + int(verify_usage.get("prompt_tokens", 0))
+        usage["completion_tokens"] = int(usage.get("completion_tokens", 0)) + spent
+        verdict_text, _verify_reasoning = final_message_text(
+            verify_response["choices"][0]["message"],
+            thinking=False,
+            qwen_reasoning_contract=qwen_reasoning_contract,
+        )
+        verdicts = goal_ledger.parse_verification(verdict_text, pending)
+        updated_goals, goal_violations = goal_ledger.apply_verdicts(audit.get("goals") or [], verdicts)
+        audit["goals"] = updated_goals
+        audit["goals_pending"] = [goal["id"] for goal in pending if goal["id"] not in verdicts]
+        if goal_violations:
+            audit["goal_violations"] = list(audit.get("goal_violations") or []) + goal_violations
+            audit["shared_failures"] = list(audit.get("shared_failures") or []) + goal_violations
+            audit["repair_required"] = True
+        return spent
+
+    goal_verification_tokens = verify_pending_goals(initial_audit, prompt)
+
     format_repair_attempted = False
     format_repair_applied = False
     format_repair_tokens = 0
     format_repair_reason = None
     format_repair_failure = None
     format_repair_method = None
-    # Previously gated on Reference, which left the other modes detected-but-not-
-    # repaired. Asset locks apply in every mode, so the gate is now the audit's
-    # own verdict. Non-Reference audits only set repair_required when a scene
-    # bible was supplied and a locked fact went missing, so a request without a
-    # bible reaches this line exactly as it did before.
+    # The gate is the audit's own verdict, whatever the target. Every audit
+    # reports repair_required, so an image target's format failure, a dropped
+    # locked fact and an unmet goal all reach the same single repair pass.
     repair_needed = initial_audit.get("repair_required") is True
+    repair_plan: dict[str, Any] = {}
     if repair_needed:
         format_repair_attempted = True
-        failed_checks = audit_failures(initial_audit)
-        format_repair_reason = ", ".join(failed_checks) or "official format audit"
-        missing_active_references = bool(initial_audit.get("missing_reference_tags"))
-        has_prepared_visual_media = any(
-            item.get("type") in {"image", "video"} for item in assembled.get("media_inputs", [])
-        )
-        if missing_active_references and has_prepared_visual_media:
-            format_repair_method = "multimodal reference correction"
-            repair_messages = multimodal_repair_messages(
-                messages,
-                prompt,
-                failed_checks,
-                repair_reference_tags,
-                duration_seconds,
-                allowed_reference_tags,
-            )
-        else:
-            format_repair_method = "narrow text correction"
-            repair_messages = narrow_repair_messages(
-                assembled,
-                prompt,
-                failed_checks,
-                repair_reference_tags,
-                duration_seconds,
-                allowed_reference_tags,
-            )
+        repair_plan = target.repair_plan(assembled, messages, prompt, initial_audit)
+        repair_plan["original"] = prompt
+        repair_messages = repair_plan["messages"]
+        format_repair_method = repair_plan["method"]
+        format_repair_reason = repair_plan.get("reason") or "format audit"
         if is_cancelled():
             raise ModelError("GENERATION_CANCELLED", "Generation was cancelled before prompt correction.")
         repair_output_tokens = (
@@ -400,61 +404,47 @@ def run_h3_pipeline(
             thinking=False,
             qwen_reasoning_contract=qwen_reasoning_contract,
         )
-        repaired_audit = audit_prompt(
-            repaired,
-            assembled["input"]["mode"],
-            duration_seconds,
-            camera_structure_allowed,
-            # Without this the repair is never verified: a turn fires to restore
-            # a dropped locked fact and the result is accepted unchecked, so a
-            # failed repair looks identical to a successful one.
-            bible=assembled["input"].get("bible"),
-        )
-        repaired_tags = reference_tags(repaired)
-        repaired_audit["missing_reference_tags"] = sorted(expected_reference_tags - repaired_tags)
-        repaired_audit["unexpected_reference_tags"] = sorted(repaired_tags - allowed_reference_tags)
-        repaired_audit["required_reference_tags"] = sorted(reference_policy_value.required)
-        repaired_audit["mutable_reference_tags"] = sorted(reference_policy_value.mutable)
-        repaired_audit["allowed_reference_tags"] = sorted(reference_policy_value.allowed)
-        repaired_audit["unexpected_audio_task"] = unexpected_audio_task(
-            repaired_audit.get("task_label"), repaired_tags
-        )
-        repaired_audit["explicit_constraint_violations"] = explicit_constraint_violations(intent_text, repaired)
-        repaired_audit["repair_required"] = bool(
-            repaired_audit.get("repair_required")
-            or repaired_audit["missing_reference_tags"]
-            or repaired_audit["unexpected_reference_tags"]
-            or repaired_audit["unexpected_audio_task"]
-            or repaired_audit["explicit_constraint_violations"]
-        )
-        repair_tags_match = repaired_tags == repair_reference_tags
-        dialogue_preserved = dialogue_lines(repaired) == dialogue_lines(prompt)
-        if (
-            repaired
-            and repair_finish_reason != "length"
-            and repaired_audit.get("repair_required") is False
-            and repair_tags_match
-            and dialogue_preserved
-        ):
-            prompt = repaired
-            format_repair_applied = True
-            initial_audit = repaired_audit
-        elif not repaired:
+        # A repair is never accepted unchecked: each target re-audits its own
+        # correction and reports why it refused one, so a failed repair cannot
+        # look identical to a successful one.
+        if not repaired:
             format_repair_failure = "empty repair"
         elif repair_finish_reason == "length":
             format_repair_failure = "repair reached its output limit"
-        elif repaired_audit.get("repair_required") is True:
-            remaining = audit_failures(repaired_audit)
-            format_repair_failure = "repaired draft still failed: " + ", ".join(remaining)
         else:
-            format_repair_failure = "correction changed the reference inventory or user dialogue"
+            accepted, repaired_audit, failure = target.accept_repair(assembled, prompt, repaired, repair_plan)
+            if accepted:
+                prompt = repaired
+                format_repair_applied = True
+                initial_audit = repaired_audit
+                # Re-auditing reset every judged goal to pending, so a repair
+                # driven by an unmet goal was accepted without anyone checking
+                # it fixed that goal, and the user saw "could not be verified".
+                goal_verification_tokens += verify_pending_goals(initial_audit, prompt)
+                if initial_audit.get("repair_required") is True:
+                    format_repair_applied = False
+                    prompt = repair_plan.get("original", prompt)
+                    format_repair_failure = (
+                        "repaired draft still failed: "
+                        + ", ".join(initial_audit.get("shared_failures") or ["an unmet goal"])
+                    )
+            else:
+                format_repair_failure = failure
         usage["prompt_tokens"] = int(usage.get("prompt_tokens", 0)) + int(repair_usage.get("prompt_tokens", 0))
         usage["completion_tokens"] = int(usage.get("completion_tokens", 0)) + format_repair_tokens
 
     generation_seconds = time.perf_counter() - generation_started
     output_tokens = int(usage.get("completion_tokens", 0))
+    # Anima answers with a positive and a negative prompt; splitting them here
+    # means the UI gets two fields it can copy separately instead of a blob the
+    # user has to divide by hand at paste time.
+    parsed = target.parse_output(prompt) if target.parse_output else {}
     return {
-        "prompt": prompt,
+        "prompt": parsed.get("prompt", prompt) or prompt,
+        "negative_prompt": parsed.get("negative_prompt", ""),
+        "media_warnings": assembled["input"].get("media_warnings") or [],
+        "goals": initial_audit.get("goals") or [],
+        "goal_verification_tokens": goal_verification_tokens,
         "prompt_audit": initial_audit,
         "input_tokens": int(usage.get("prompt_tokens", 0)),
         "output_tokens": output_tokens,

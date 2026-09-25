@@ -16,7 +16,7 @@ function systemPromptPanel(profile, label, description, icon, hidden = false) {
         <span><small>System Prompt</small><strong>${label}</strong></span>
         <span class="h3ps-system-prompt-panel-status"><em data-system-prompt-status="${profile}">Default</em>${icon("check", 13)}</span>
       </header>
-      <p>${description} Official MiniMax guides are applied separately and are not modified.</p>
+      <p>${description} The official model guides are applied separately and are never modified.</p>
       <textarea data-system-prompt="${profile}" maxlength="8000" spellcheck="true" disabled></textarea>
       <footer><small data-system-prompt-count="${profile}">0 / 8,000</small><button type="button" data-system-prompt-reset="${profile}" hidden>Reset to default</button></footer>
     </div>`;
@@ -112,10 +112,20 @@ export function settingsMarkup(icon) {
               <span><strong>Reference</strong><small>Reference mode</small></span>
               <span><em data-system-prompt-summary-status="reference">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
             </button>
+            <button type="button" data-system-prompt-profile="krea2">
+              <span><strong>Krea 2</strong><small>Krea 2 image prompts</small></span>
+              <span><em data-system-prompt-summary-status="krea2">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+            </button>
+            <button type="button" data-system-prompt-profile="anima">
+              <span><strong>Anima</strong><small>Anima tag prompts</small></span>
+              <span><em data-system-prompt-summary-status="anima">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+            </button>
           </div>
           <div class="h3ps-system-prompt-editor" data-system-prompt-editor hidden>
             ${systemPromptPanel("standard", "Standard", "Instructions used by T2VA, I2VA, FL2VA and L2VA.", icon)}
             ${systemPromptPanel("reference", "Reference", "Instructions used by Reference mode.", icon, true)}
+            ${systemPromptPanel("krea2", "Krea 2", "Instructions used for Krea 2 prompts. The default shown reflects your Naughty and Story builder settings; an edit here replaces it entirely and the flags stop changing it.", icon, true)}
+            ${systemPromptPanel("anima", "Anima", "Instructions used for Anima prompts. The default shown reflects your Naughty, Story builder and variant settings; an edit here replaces it entirely and those stop changing it.", icon, true)}
           </div>
           <div class="h3ps-draft-defaults-action" data-draft-defaults-action>
             <button type="button" data-restore-default-drafts>${icon("refresh", 13)}<span data-restore-default-drafts-label>Restore default drafts</span></button>

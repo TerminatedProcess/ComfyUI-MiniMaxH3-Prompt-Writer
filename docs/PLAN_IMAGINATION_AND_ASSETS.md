@@ -329,3 +329,32 @@ the returned prompt, not by reading a field off the response.
 - Expander occasionally emits non-visual interpretation ("quiet stagnation").
   Tighten the "camera could see it" rule; low severity since Stage B discards
   unrenderable material.
+
+---
+
+## Superseded by the multi-target writer (2026-09-25)
+
+This plan's design landed and then grew a second half. The writer now builds ONE
+model-agnostic scene document and compiles it for MiniMax H3, Krea 2 or Anima —
+see [MULTI_TARGET_WRITER.md](MULTI_TARGET_WRITER.md).
+
+What carried over unchanged:
+
+- Structured state re-rendered into prose, never prose edited in place. The
+  measurements above are the reason, and they still hold.
+- Asset locks constrain generation, not just grade it afterwards.
+- Origins are assigned structurally. Asking the model to classify its own inputs
+  was measured at 0/6 here, and the new code still never does it; where a model
+  now names the phrase a field came from, that claim is checked against the
+  brief rather than believed.
+
+What changed:
+
+- `scene_bible.py` is superseded by `generic.py` for new work. Its seven fields
+  become nineteen, and its three origins become five: `unspecified`, `invented`,
+  `asset`, `user` and `override`. The bible remains for the pre-existing
+  brief-driven path and its tests.
+- Standing instructions became first-class (`goals.py`) rather than living in
+  the turn that created them.
+- Imagination is a switch (Story builder), defaulting on, rather than an
+  unconditional default.

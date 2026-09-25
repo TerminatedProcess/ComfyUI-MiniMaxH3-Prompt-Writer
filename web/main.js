@@ -3,6 +3,7 @@ import { promptHighlightMarkup } from "./prompt_highlights.js";
 import { generationButtonMarkup, sequenceNotificationOptions, aspectRatioMarkup, bindAspectRatio, splitMenuMarkup, setSplitMenuOpen, copyButtonMarkup } from "./writer_controls.js";
 import { mediaVisualDescriptor } from "./media_visual.js";
 import { createSequenceWorkspace } from "./sequence_workspace.js";
+import { createWriterStage } from "./writer_stage.js";
 import { generateSequence, cancelSequence } from "./api/sequence.js";
 import { app } from "/scripts/app.js";
 import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, unloadModel, uploadMedia } from "./api/h3studio.js";
@@ -47,6 +48,26 @@ const vramHandoffCoordinator = createVramHandoffCoordinator();
 const INSTALLATION_GUIDE_URL = "https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/blob/main/docs/INSTALLATION.md";
 const TROUBLESHOOTING_GUIDE_URL = "https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/blob/main/docs/TROUBLESHOOTING.md";
 const MUSIC3_GUIDE_URL = "https://github.com/MiniMax-AI/MiniMax-Music3/tree/main/skills/music-caption-rewriter";
+// Media belongs to the writing session, not to one mode: attach a picture once
+// and every target on the right can be compiled from it.
+const SESSION_MEDIA_MODE = "Reference";
+
+/** Which mode's media zone a given generation mode should show.
+
+    The Sequence workspace answers with the mode unchanged when it is inactive,
+    so its answer cannot be used as "it decided" -- taking it at face value fed
+    an image target's mode into the video-only MODES table and crashed the media
+    zone with "cannot read properties of undefined".
+
+    The `!MODES[mode]` arm covers the same crash by the other door: if the stage
+    fails to start it is nulled, but a persisted Krea 2 / Anima mode survives in
+    preferences, and every later renderMedia would look it up in a table that
+    only describes H3's video modes. */
+function mediaModeFor(mode) {
+  if (studio?.sequence?.active) return studio.sequence.mediaMode(mode);
+  if (mode !== "Music3" && (studio?.stage || !MODES[mode])) return SESSION_MEDIA_MODE;
+  return mode;
+}
 
 const MODES = {
   T2VA: {
@@ -260,11 +281,24 @@ async function syncSystemPromptEditor(profile) {
   const summaryStatus = studio.root.querySelector(`[data-system-prompt-summary-status="${profile}"]`);
   const reset = studio.root.querySelector(`[data-system-prompt-reset="${profile}"]`);
   const count = studio.root.querySelector(`[data-system-prompt-count="${profile}"]`);
-  const requestMode = profile === "music3_lyrics" ? "Music3Lyrics" : profile === "music3" ? "Music3" : profile === "reference" ? "Reference" : "T2VA";
+  const requestMode = {
+    music3_lyrics: "Music3Lyrics",
+    music3: "Music3",
+    reference: "Reference",
+    krea2: "Krea2",
+    anima: "Anima",
+  }[profile] || "T2VA";
   textarea.disabled = true;
   if (!studio.systemPromptDefaults[profile]) {
     try {
-      const result = await getSystemPrompt(requestMode);
+      // Composed with the flags as they stand, so the editor shows the text that
+      // will actually be sent rather than a baseline nobody runs.
+      const session = studio.stage?.session?.();
+      const result = await getSystemPrompt(requestMode, {
+        nsfw: session?.inputs?.nsfw !== false,
+        story: session?.inputs?.story !== false,
+        variant: session?.target?.variant || null,
+      });
       studio.systemPromptDefaults[result.profile] = result.system_prompt;
     } catch (error) {
       textarea.value = "";
@@ -289,6 +323,8 @@ function syncSystemPromptEditors() {
   return Promise.all([
     syncSystemPromptEditor("standard"),
     syncSystemPromptEditor("reference"),
+    syncSystemPromptEditor("krea2"),
+    syncSystemPromptEditor("anima"),
     syncSystemPromptEditor("music3"),
     syncSystemPromptEditor("music3_lyrics"),
   ]);
@@ -296,7 +332,7 @@ function syncSystemPromptEditors() {
 
 function setSystemPromptProfile(profile) {
   if (!studio) return;
-  studio.settingsPromptProfile = profile === "reference" ? "reference" : "standard";
+  studio.settingsPromptProfile = ["reference", "krea2", "anima"].includes(profile) ? profile : "standard";
   studio.root.querySelectorAll("[data-system-prompt-profile]").forEach((button) => {
     const selected = button.dataset.systemPromptProfile === studio.settingsPromptProfile;
     button.classList.toggle("is-selected", selected);
@@ -352,6 +388,7 @@ const STYLE_MODULES = [
   "music",
   "responsive",
   "sequence",
+  "stage",
 ];
 
 function injectStyles() {
@@ -480,7 +517,7 @@ function notifyMediaCompatibility() {
 }
 
 function renderMedia(mode) {
-  mode = studio.sequence?.mediaMode(mode) ?? mode;
+  mode = mediaModeFor(mode);
   studio.floatingMedia?.refresh();
   if (mode === "Music3") {
     studio.root.querySelectorAll("[data-mode]").forEach((button) => button.classList.remove("is-active"));
@@ -527,6 +564,7 @@ function renderMedia(mode) {
       </div>`;
   }
   notifyMediaCompatibility();
+  studio.stage?.mediaChanged();
   bindMediaActions(mode);
   syncComposerControl(mode);
 
@@ -783,12 +821,17 @@ function showToast(title, message, details = null, action = null, options = {}) 
   }
 }
 
+// An image target has no sample prompt: falling back to T2VA's put an
+// `integrated_multimodal_description:` H3 block in the Krea 2 output editor and
+// marked those modes permanently "dirty".
+const EMPTY_DRAFT = { brief: "", prompt: "" };
+
 function defaultModeDraft(mode) {
   if (mode === "Music3") return MUSIC3_DEFAULT_DRAFT;
   if (mode === "Reference") {
     return { brief: REFERENCE_DEFAULT_BRIEF, prompt: SAMPLE_PROMPT };
   }
-  return MODE_DEFAULT_DRAFTS[mode] || MODE_DEFAULT_DRAFTS.T2VA;
+  return MODE_DEFAULT_DRAFTS[mode] || (MODES[mode] ? MODE_DEFAULT_DRAFTS.T2VA : EMPTY_DRAFT);
 }
 
 function currentDraftFields() {
@@ -803,10 +846,13 @@ function currentBriefTextarea() {
   return studio.root.querySelector(studio.mode === "Music3" ? "[data-music-brief]" : "[data-video-brief]");
 }
 
-async function copyPromptText(text, music = false) {
+async function copyPromptText(text, music = false, title = null) {
   try {
     await navigator.clipboard.writeText(text);
-    showToast(music ? "Caption copied" : "Prompt copied", music ? "The generated Music 3 caption is on your clipboard." : "The generated H3 prompt is on your clipboard.");
+    // `title` names what was copied when it is not the main prompt -- otherwise
+    // copying the negative prompt announced the H3 prompt first, then itself.
+    if (title) showToast(title, "It is on your clipboard.");
+    else showToast(music ? "Caption copied" : "Prompt copied", music ? "The generated Music 3 caption is on your clipboard." : "The generated H3 prompt is on your clipboard.");
   } catch (error) {
     showToast("Copy failed", "Clipboard access was denied.", error.message);
   }
@@ -847,7 +893,7 @@ function clearCurrentPrompts({ notify = true } = {}) {
 async function clearCurrentMedia({ notify = true } = {}) {
   if (!studio || studio.requestBusy) return false;
   try {
-    const result = await clearMedia(studio.sessionId, studio.sequence?.mediaMode(studio.mode) ?? studio.mode);
+    const result = await clearMedia(studio.sessionId, mediaModeFor(studio.mode));
     studio.assets = result.assets;
 
 
@@ -937,7 +983,11 @@ function syncWorkspace() {
     button.classList.toggle("is-active", selected);
     button.setAttribute("aria-pressed", String(selected));
   });
-  studio.root.querySelector("[data-video-modes]").hidden = music;
+  // The mode tabs are superseded by the delivery bar: the model is chosen on the
+  // right, and H3's own mode is inferred from the attached media.
+  studio.root.querySelector("[data-video-modes]").hidden = music || Boolean(studio.stage);
+  const footerGenerate = studio.root.querySelector("[data-generate]");
+  if (footerGenerate) footerGenerate.hidden = Boolean(studio.stage) && !music;
   studio.root.querySelector("[data-video-inputs]").hidden = music;
   studio.root.querySelector("[data-music-inputs]").hidden = !music;
   const outputLabel = music ? "Generated caption" : "Generated prompt";
@@ -965,11 +1015,15 @@ function syncWorkspace() {
   syncModeAvailability();
 }
 
+function attachedVisualCount() {
+  return (studio?.assets || []).filter((asset) => asset.type === "image" || asset.type === "video").length;
+}
+
 function syncModeAvailability() {
   if (!studio?.root) return;
   const textOnlyDirect = isTextOnlyDirectModel(studio.selectedModel);
   studio.root.querySelectorAll("[data-mode]").forEach((control) => {
-    const unavailable = !isGenerationModeAvailable(studio.selectedModel, control.dataset.mode);
+    const unavailable = !isGenerationModeAvailable(studio.selectedModel, control.dataset.mode, attachedVisualCount());
     control.disabled = studio.requestBusy || unavailable;
     control.setAttribute("aria-disabled", String(control.disabled));
     control.title = unavailable && textOnlyDirect
@@ -984,10 +1038,10 @@ function syncModeAvailability() {
 }
 
 function generationModeIsAvailable() {
-  if (isGenerationModeAvailable(studio.selectedModel, studio.mode)) return true;
+  if (isGenerationModeAvailable(studio.selectedModel, studio.mode, attachedVisualCount())) return true;
   showToast(
     "Text-only Direct GGUF",
-    "Use T2VA or Music3, or add the matching mmproj to enable visual modes.",
+    "This model cannot read the attached references. Remove them, or add the matching mmproj.",
   );
   return false;
 }
@@ -1040,6 +1094,9 @@ function thinkingFallbackMessage(result, outputLabel) {
 }
 
 function setGenerationState(state, label, detail) {
+  // The stage owns the compile button now; without this it stays enabled and
+  // keeps saying "Generate", while a click during a run actually cancels.
+  queueMicrotask(() => studio?.stage?.syncBusy());
   const button = studio.root.querySelector("[data-generate]");
   const status = studio.root.querySelector("[data-status]");
   const statusDetail = studio.root.querySelector("[data-status-detail]");
@@ -1405,6 +1462,12 @@ async function startGenerationPreview() {
         result.api_provider ? "Reasoning provider managed" : external ? null : `Thinking ${result.thinking ? "on" : "off"}`,
       ];
       showToast(studio.mode === "Music3" ? "Caption generated" : "Prompt generated", details.filter(Boolean).join(" · "));
+    }
+    studio.stage?.afterCompile(result, studio.mode).catch(() => {});
+    if (result.media_warnings?.length) {
+      // References the chosen mode could not use were dropped; silence here
+      // reads as "the writer ignored my picture".
+      showToast("Some references were not used", result.media_warnings.join(" "), null, null, { dismissOnWorkspaceClick: true });
     }
     studio.desktopNotifications.notify("Generation finished. Your prompt is ready.");
     if (result.lifecycle_warning) showToast("Model cleanup", result.lifecycle_warning, null, null, {dismissOnWorkspaceClick:true});
@@ -2047,7 +2110,7 @@ function selectModel(model, { preserveSettingsProvider = false } = {}) {
   studio.modelSelectionRevision = (studio.modelSelectionRevision || 0) + 1;
   rememberRuntimePreferences();
   selectModelState(studio, model, { preserveSettingsProvider });
-  const switchedToT2VA = !isGenerationModeAvailable(model, studio.mode);
+  const switchedToT2VA = !isGenerationModeAvailable(model, studio.mode, attachedVisualCount());
   if (switchedToT2VA) {
     stashCurrentModeDraft();
     studio.mode = "T2VA";
@@ -2956,7 +3019,7 @@ function createStudio() {
           <span><strong>H3 Prompt Writer</strong></span>
         </div>
         <nav class="h3ps-workspaces" aria-label="Writer workspace">
-          <button type="button" data-workspace="video">H3 Video</button>
+          <button type="button" data-workspace="video">Writer</button>
           <button type="button" data-workspace="music">Music 3</button>
         </nav>
         <div class="h3ps-header-meta">
@@ -3188,6 +3251,7 @@ function createStudio() {
   bindAspectRatio(root.querySelector('[data-choice-toggle="aspect"]').closest(".h3ps-choice"), studio.aspectRatio, value => {
     studio.aspectRatio = value;
     saveUserPreferences(localStorage, studio);
+    studio.stage?.setAspectRatio(value).catch(() => {});
   });
   syncTheme();
   syncInterfaceSize();
@@ -3225,7 +3289,7 @@ function createStudio() {
   });
   root.querySelectorAll("[data-workspace]").forEach((button) => button.addEventListener("click", () => {
     const nextMode = button.dataset.workspace === "music" ? "Music3" : studio.lastVideoMode;
-    if (!isGenerationModeAvailable(studio.selectedModel, nextMode)) return;
+    if (!isGenerationModeAvailable(studio.selectedModel, nextMode, attachedVisualCount())) return;
     if (nextMode === studio.mode) return;
     stashCurrentModeDraft();
     if (studio.mode !== "Music3") studio.lastVideoMode = studio.mode;
@@ -3237,7 +3301,7 @@ function createStudio() {
     saveUserPreferences(localStorage, studio);
   }));
   root.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => {
-    if (!isGenerationModeAvailable(studio.selectedModel, button.dataset.mode)) return;
+    if (!isGenerationModeAvailable(studio.selectedModel, button.dataset.mode, attachedVisualCount())) return;
     if (button.dataset.mode === studio.mode) return;
     stashCurrentModeDraft();
     studio.mode = button.dataset.mode;
@@ -3307,6 +3371,12 @@ function createStudio() {
     root.querySelector("[data-duration-label]").textContent = `${studio.durationSeconds} seconds`;
     event.target.style.setProperty("--h3ps-range", `${(studio.durationSeconds - 1) / 19 * 100}%`);
     saveUserPreferences(localStorage, studio);
+    // Persisted server-side too: the left rail survives a restart, not just a reload.
+    clearTimeout(studio.durationPersistTimer);
+    studio.durationPersistTimer = setTimeout(
+      () => studio.stage?.setDuration(studio.durationSeconds).catch(() => {}),
+      400,
+    );
   });
   root.querySelectorAll("[data-runtime-toggle]").forEach((button) => button.addEventListener("click", (event) => {
     event.preventDefault();
@@ -3393,6 +3463,18 @@ function createStudio() {
     saveCurrentModeDraft();
   };
   root.querySelectorAll("[data-video-brief], [data-music-brief]").forEach((brief) => brief.addEventListener("input", updateBriefCount));
+  const videoBrief = root.querySelector("[data-video-brief]");
+  const persistBrief = () => {
+    clearTimeout(studio.briefPersistTimer);
+    studio.stage?.setBrief(videoBrief.value).catch(() => {});
+  };
+  videoBrief.addEventListener("input", () => {
+    clearTimeout(studio.briefPersistTimer);
+    studio.briefPersistTimer = setTimeout(persistBrief, 600);
+  });
+  // Leaving the box commits immediately, so a click straight into the model
+  // picker cannot outrun the debounce.
+  videoBrief.addEventListener("blur", persistBrief);
   root.querySelector("[data-music-lyrics]").addEventListener("input", () => {
     updateMusicLyricsCount();
     saveCurrentModeDraft();
@@ -3644,6 +3726,71 @@ function createStudio() {
     copy: (text) => copyPromptText(text),
     insert: (editor, reference) => insertReferenceAtCaret(editor, reference, editor.selectionStart),
   });
+  studio.stage = createWriterStage({
+    root,
+    icon,
+    sessionId: () => studio.sessionId,
+    assets: () => studio.assets,
+    briefValue: () => root.querySelector("[data-video-brief]").value,
+    currentMode: () => studio.mode,
+    // One inference payload for the generic-stage calls too, so the build and the
+    // conversation run on the model the user picked in Settings.
+    inferencePayload: () => buildGeneratePayload(studio, { creativeBrief: "", seed: newGenerationSeed() }),
+    requestBusy: () => studio.requestBusy,
+    selectMode: (mode, { silent = false } = {}) => {
+      if (mode === studio.mode) return;
+      // Deliberately NOT the legacy per-mode draft swap: the brief, the media and
+      // the generic prompt belong to the session now, so choosing a different
+      // model on the right must not rewrite what you typed on the left.
+      studio.mode = mode;
+      if (mode !== "Music3") studio.lastVideoMode = mode;
+      syncWorkspace();
+      renderMedia(studio.mode);
+      if (!silent) saveUserPreferences(localStorage, studio);
+    },
+    inferredModeSummary: () => inferredModeSummary(),
+    compile: () => startGenerationPreview(),
+    setStatus: (label) => setGenerationState("busy", label, studio.selectedModel?.name?.split("/").pop() || ""),
+    clearStatus: () => setGenerationState("idle"),
+    notify: (title, message) => showToast(title, message, null, null, { dismissOnWorkspaceClick: true }),
+    notifyError: (error) => showToast("Writer", error.message || String(error), error.details || null),
+    confirmReset: () => window.confirm(
+      "Reset this session? The generic prompt, goals, conversation, compiled prompts and attached media are cleared.",
+    ),
+    afterReset: () => {
+      studio.assets = [];
+      root.querySelector("[data-video-brief]").value = "";
+      root.querySelector("[data-output]").value = "";
+      renderMedia(studio.mode);
+      renderPromptHighlights();
+    },
+    invalidateSystemPrompts: () => {
+      // The composed default depends on the flags, and it is cached. Without
+      // this the panel keeps showing the text from whatever the flags were the
+      // first time it was opened.
+      studio.systemPromptDefaults = {};
+      if (!root.querySelector("[data-settings-view]").hidden) syncSystemPromptEditors();
+    },
+    onSessionChanged: (session) => {
+      // Restore the saved brief only into an empty box. Writing it back over a
+      // populated one raced the typing debounce and silently replaced what the
+      // user had just written when they switched models.
+      const brief = root.querySelector("[data-video-brief]");
+      if (session?.inputs?.brief && !brief.value.trim()) brief.value = session.inputs.brief;
+      syncModeAvailability();
+    },
+    // Only replace the editor when the user has not edited it themselves.
+    outputIsReplaceable: (prompt) => {
+      const editor = root.querySelector("[data-output]");
+      return Boolean(prompt) && (!editor.value.trim() || editor.value === studio.lastModelPrompt);
+    },
+    afterOutputReplaced: (stored) => {
+      studio.lastModelPrompt = stored.prompt;
+      renderPromptHighlights();
+      syncModifiedState();
+    },
+    copy: (text, title) => copyPromptText(text, false, title),
+  });
   syncWorkspace();
   restoreModeDraft(studio.mode);
   renderMedia(studio.mode);
@@ -3651,7 +3798,22 @@ function createStudio() {
   syncSystemPromptEditors();
   setMusicSystemPromptProfile(studio.musicSystemPromptProfile);
   refreshModels();
+  studio.stage.start().catch((error) => {
+    // The stage is the whole two-pane flow; if it cannot load, say so rather
+    // than leaving the panes half-rendered and silent.
+    studio.stage = null;
+    syncWorkspace();
+    showToast("Writer stage unavailable", error.message || String(error));
+  });
   return studio;
+}
+
+/** H3's mode in plain English, from what is attached. Never shown as jargon. */
+function inferredModeSummary() {
+  const target = studio.stage?.targetFor(studio.mode);
+  if (!target?.infers_mode) return "";
+  const mode = target.modes.find((item) => item.id === studio.mode);
+  return mode?.summary || "";
 }
 
 function supportsWorkflowMedia() {

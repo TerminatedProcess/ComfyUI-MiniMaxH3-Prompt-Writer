@@ -873,6 +873,8 @@ class ApiProviderBackend:
 
                 def complete(**kwargs: Any) -> dict[str, Any]:
                     kwargs.pop("purpose", None)
+                    # Neither backend overrides the caller's sampling.
+                    kwargs.pop("structured", None)
                     return handler(**kwargs)
 
                 result = run_h3_pipeline(

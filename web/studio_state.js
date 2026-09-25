@@ -9,13 +9,16 @@ export const USER_PREFERENCES_STORAGE_KEY = "h3ps-preferences-v1";
 export const MODE_DRAFTS_STORAGE_KEY = "h3ps-mode-drafts-v1";
 export const INTERFACE_SIZES = ["100", "110", "120", "125"];
 
-const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"];
+// Every mode the studio can persist a draft or preference for. The registry
+// (GET /targets) is authoritative for what exists; this list only has to cover
+// what localStorage may legitimately hold.
+const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Krea2", "Anima", "Music3"];
 const ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"];
 const PROVIDERS = ["direct", "external", "ollama", "api"];
 const CONTEXT_PROFILES = ["auto", "low", "standard", "extended", "large", "maximum", "custom"];
 const KV_CACHES = ["auto", "f16", "q8"];
 const GENERATION_BUDGETS = ["auto", "2048", "4096", "8192", "custom"];
-const DRAFT_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"];
+const DRAFT_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Krea2", "Anima", "Music3"];
 
 export function isPersistedDraftMode(mode) {
   return DRAFT_MODES.includes(mode);
@@ -30,8 +33,10 @@ export function isTextOnlyDirectModel(model) {
   return model?.family === "gguf" && model?.capabilities?.images === false;
 }
 
-export function isGenerationModeAvailable(model, mode) {
-  return !isTextOnlyDirectModel(model) || mode === "T2VA" || mode === "Music3";
+export function isGenerationModeAvailable(model, mode, attachedVisuals = 0) {
+  // The gate is the attachment, not the mode: a text-only model can write any
+  // target's prompt from text alone, it just cannot look at pictures.
+  return !isTextOnlyDirectModel(model) || attachedVisuals === 0;
 }
 
 export function isModeDraftDirty(mode, draft, defaults) {
@@ -253,6 +258,8 @@ export function saveCustomSystemPrompts(storage, prompts) {
 export function systemPromptProfile(mode) {
   if (mode === "Music3Lyrics") return "music3_lyrics";
   if (mode === "Music3") return "music3";
+  if (mode === "Krea2") return "krea2";
+  if (mode === "Anima") return "anima";
   return mode === "Reference" || mode === "reference" ? "reference" : "standard";
 }
 
@@ -350,9 +357,33 @@ function sharedInferencePayload(state) {
   };
 }
 
+export function stagePayload(state) {
+  // Sent with every compile so a prompt is built from the generic document, is
+  // checked against the standing goals, and reads media from the session rather
+  // than from one mode's own uploads.
+  // `session` is a getter function on the stage, not a property. Reading it as a
+  // property yielded a truthy function whose fields were all undefined, so the
+  // document, the goals, the variant and both flags silently never left the
+  // browser and every compile quietly fell back to the brief.
+  const session = state.stage?.session?.();
+  if (!session) return {};
+  const payload = {
+    nsfw: session.inputs?.nsfw !== false,
+    story: session.inputs?.story !== false,
+    session_media: true,
+    goals: session.goals || [],
+  };
+  const hasDocument = Object.values(session.fields || {}).some((record) => record.value);
+  if (hasDocument) payload.generic = session.generic;
+  const variant = session.target?.variant;
+  if (variant && state.stage?.variantsFor?.(state.mode)?.length) payload.variant = variant;
+  return payload;
+}
+
 export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }) {
   const payload = {
     ...sharedInferencePayload(state),
+    ...stagePayload(state),
     duration_seconds: state.durationSeconds,
     aspect_ratio: state.aspectRatio,
     creative_brief: creativeBrief,
@@ -365,6 +396,7 @@ export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }
 export function buildRefinePayload(state, { currentPrompt, instruction, creativeBrief, lyrics = "", seed }) {
   const payload = {
     ...sharedInferencePayload(state),
+    ...stagePayload(state),
     current_prompt: currentPrompt,
     instruction,
     duration_seconds: state.durationSeconds,
@@ -444,6 +476,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     lifecycleDotCount: 0,
     generationDotCount: 0,
     sessionId,
+    stage: null,
     assets: [],
     audioSupported: false,
     models: [],

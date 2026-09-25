@@ -12,23 +12,26 @@ import av
 import folder_paths
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from .targets import mode_limits as _mode_limits
+from .targets.h3 import REFERENCE_LIMITS
+
 
 CACHE_ROOT = Path(folder_paths.get_temp_directory()) / "h3_prompt_studio"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac", ".opus"}
 MAX_FILE_BYTES = 1024 * 1024 * 1024
-REFERENCE_LIMITS = {"image": 9, "video": 3, "audio": 3, "total": 12}
 REFERENCE_DURATION_TOLERANCE_SECONDS = 15.1
 CONTACT_SHEET_INDEX_BASE_SIZE = 18
 CONTACT_SHEET_INDEX_SCALE = 1.75
-MODE_LIMITS = {
-    "T2VA": {},
-    "I2VA": {"image": 1},
-    "FL2VA": {"image": 2},
-    "L2VA": {"image": 1},
-    "Reference": REFERENCE_LIMITS,
-}
+# Reference ceilings are declared by each target, not listed here: a model's
+# limits belong with the model, and `backend/targets` is their single owner.
+MODE_LIMITS = _mode_limits()
+# Media belongs to the writing session, not to one mode. Everything the user
+# drops in is stored under this canonical mode, and `view()` projects it onto
+# whichever mode a compile step actually runs -- so attaching a picture once
+# serves H3, Krea 2 and Anima instead of having to be re-uploaded per mode.
+SESSION_MEDIA_MODE = "Reference"
 
 
 def _reset_cache() -> None:
@@ -468,6 +471,74 @@ class MediaStore:
             "valid": not violations,
             "warnings": [{"code": "REFERENCE_VIDEO_TOTAL", "message": "Reference videos exceed 15 seconds in total."}]
             if mode == "Reference" and sum(asset.get("duration", 0) or 0 for asset in assets if asset["type"] == "video") > 15 else [],
+        }
+
+    def view(self, session_id: str, mode: str, *, source_mode: str = SESSION_MEDIA_MODE) -> dict[str, Any]:
+        """A manifest for `mode` built from the session's canonical media.
+
+        Non-mutating: the stored assets keep their canonical `<Picture N>`
+        identities and the copies returned here carry the labels `mode` uses
+        ("First frame", "Start image", ...). This is what lets one drop zone
+        serve every target -- the alternative, storing media per mode, means a
+        picture attached for H3 is invisible to Krea 2.
+
+        A mode the attached media cannot satisfy returns a violation rather than
+        silently ignoring the extras: an explicit override that does not fit is
+        the user's mistake to see, not ours to paper over.
+        """
+        if mode not in MODE_LIMITS:
+            raise MediaError("INVALID_MODE", "The selected generation mode is not supported.")
+        if mode == source_mode:
+            return self.manifest(session_id, mode)
+        if session_id in self.sessions:
+            self.touch(session_id)
+        limits = MODE_LIMITS[mode]
+        stored = [
+            asset for asset in self.sessions.get(session_id, [])
+            if asset["mode"] == source_mode and asset.get("status") != "needs_edit"
+        ]
+        violations: list[dict[str, str]] = []
+        kept: list[dict[str, Any]] = []
+        per_type: dict[str, int] = {}
+        for asset in stored:
+            kind = asset["type"]
+            allowed = limits.get(kind, 0)
+            if not allowed:
+                if kind not in limits:
+                    violations.append({
+                        "code": "UNSUPPORTED_MEDIA",
+                        "message": f"{mode} does not accept {kind} files; {kind} references are ignored.",
+                    })
+                continue
+            if per_type.get(kind, 0) >= allowed:
+                violations.append({
+                    "code": "MEDIA_LIMIT_REACHED",
+                    "message": f"{mode} accepts {allowed} {kind} reference(s); the extra ones are not used.",
+                })
+                continue
+            per_type[kind] = per_type.get(kind, 0) + 1
+            kept.append(dict(asset))
+        # Relabel the copies for the target mode. FL2VA's two images become the
+        # first and last frame in attachment order, which is the order shown.
+        for index, asset in enumerate(kept, 1):
+            if mode == "FL2VA" and asset["type"] == "image":
+                asset["reference"] = "First frame" if index == 1 else "Last frame"
+            elif mode == "I2VA" and asset["type"] == "image":
+                asset["reference"] = "Start image"
+            elif mode == "L2VA" and asset["type"] == "image":
+                asset["reference"] = "Last frame"
+        return {
+            "session_id": session_id,
+            "mode": mode,
+            "source_mode": source_mode,
+            "assets": [self.public(asset) for asset in kept],
+            "counts": {
+                kind: len([asset for asset in kept if asset["type"] == kind])
+                for kind in ("image", "video", "audio")
+            },
+            "violations": [],
+            "valid": True,
+            "warnings": [{"code": item["code"], "message": item["message"]} for item in violations],
         }
 
     @staticmethod

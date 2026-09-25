@@ -29,7 +29,26 @@ export const getApiProviderModels = (connectionId) => post("/api-provider/models
 export const disconnectApiProvider = (connectionId) => post("/api-provider/disconnect", { connection_id: connectionId });
 export const getGuides = () => request("/guides");
 export const getGuide = (mode) => request(`/guides/${encodeURIComponent(mode)}`);
-export const getSystemPrompt = (mode) => request(`/system-prompt/${encodeURIComponent(mode)}`);
+export const getSystemPrompt = (mode, flags = {}) => {
+  const query = new URLSearchParams();
+  if (flags.nsfw !== undefined) query.set("nsfw", String(Boolean(flags.nsfw)));
+  if (flags.story !== undefined) query.set("story", String(Boolean(flags.story)));
+  if (flags.variant) query.set("variant", flags.variant);
+  const suffix = query.toString() ? `?${query}` : "";
+  return request(`/system-prompt/${encodeURIComponent(mode)}${suffix}`);
+};
+
+// The target registry and the generic prompt stage. The studio builds its
+// workspaces, fields and Settings cards from getTargets() rather than from a
+// hardcoded copy of the mode list.
+export const getTargets = () => request("/targets");
+export const getSession = (sessionId) => request(`/session?session_id=${encodeURIComponent(sessionId)}`);
+export const saveInputs = (payload) => post("/session/inputs", payload);
+export const resetSession = (payload) => post("/session/reset", payload);
+export const buildGeneric = (payload) => post("/generic/build", payload);
+export const sendGenericTurn = (payload) => post("/generic/turn", payload);
+export const editGenericField = (payload) => post("/generic/field", payload);
+export const changeGoal = (payload) => post("/goals", payload);
 export const assemble = (payload) => post("/assemble", payload);
 export const generate = (payload) => post("/generate", payload);
 export const cancel = () => post("/cancel");

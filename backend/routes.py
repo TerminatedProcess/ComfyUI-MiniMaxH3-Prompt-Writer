@@ -17,7 +17,7 @@ from .assembly import AssemblyError, assemble_lyrics_request, assemble_refinemen
 from .catalog import discover_models_with_diagnostics, find_model, model_setup_catalog
 from .comfy_state import comfyui_runtime_snapshot
 from .devlog import DEVELOPER_MODE, LOG_PATH, PeakVRAMMonitor, gpu_memory_snapshot, write_event
-from .guides import MODE_GUIDES, guide_catalog, guide_for_mode
+from .guides import guide_catalog
 from .media import CACHE_ROOT, MAX_FILE_BYTES, MODE_LIMITS, STORE, MediaError, parse_session_id
 from .media_editor import browser_source, commit_edit, prepare_edit, video_frame
 from .memory import assess_free_vram
@@ -30,10 +30,14 @@ from .runtime_diagnostics import get_gguf_runtime_diagnostics
 from .system_prompts import SystemPromptError, system_prompt_for_mode
 from .version import VERSION
 from .sequence_routes import register_sequence_routes
+from .generic_routes import register_generic_routes
+from . import session_store
+from .targets import TargetError, generation_modes, guide_ids_for_mode, profile_for_mode
 
 
 ROUTE_PREFIX = "/h3studio"
-MODES = {"T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"}
+# Every mode any target declares as generatable. One owner, no second list.
+MODES = set(generation_modes())
 STATE: dict[str, Any] = {
     "phase": "idle",
     "active_request_id": None,
@@ -623,21 +627,43 @@ async def get_guides(_request: web.Request) -> web.Response:
 @routes.get(f"{ROUTE_PREFIX}/guides/{{mode}}")
 async def get_guide(request: web.Request) -> web.Response:
     mode = request.match_info["mode"]
-    if mode not in MODE_GUIDES:
-        return _error("INVALID_MODE", "The selected MiniMax mode is not supported.", status=404)
-    return web.json_response({"guide": guide_for_mode(mode)})
+    try:
+        guide_ids = guide_ids_for_mode(mode)
+    except TargetError:
+        return _error("INVALID_MODE", "The selected generation mode is not supported.", status=404)
+    if not guide_ids:
+        return _error("INVALID_MODE", "That mode has no published guide.", status=404)
+    from .guides import load_guide
+
+    return web.json_response({
+        "guide": load_guide(guide_ids[0]),
+        "supporting_guides": [load_guide(guide_id) for guide_id in guide_ids[1:]],
+    })
 
 
 @routes.get(f"{ROUTE_PREFIX}/system-prompt/{{mode}}")
 async def get_system_prompt(request: web.Request) -> web.Response:
+    """The contract for a mode, composed with the flags the studio has set.
+
+    The flags are query parameters rather than assumed, so the Settings editor
+    shows the text that will actually be sent instead of a baseline nobody runs.
+    """
     mode = request.match_info["mode"]
+    query = request.query
+    nsfw = query.get("nsfw", "false").lower() == "true"
+    story = query.get("story", "false").lower() == "true"
+    variant = query.get("variant") or None
     try:
-        prompt = system_prompt_for_mode(mode)
-    except SystemPromptError as error:
-        return _error(error.code, error.message, status=404)
+        prompt = system_prompt_for_mode(mode, nsfw=nsfw, story=story, variant=variant)
+        profile = profile_for_mode(mode)
+    except (SystemPromptError, TargetError) as error:
+        return _error(getattr(error, "code", "INVALID_MODE"), str(error), status=404)
     return web.json_response({
         "mode": mode,
-        "profile": "music3_lyrics" if mode == "Music3Lyrics" else "music3" if mode == "Music3" else "reference" if mode == "Reference" else "standard",
+        "profile": profile,
+        "nsfw": nsfw,
+        "story": story,
+        "variant": variant,
         "system_prompt": prompt,
     })
 
@@ -663,12 +689,19 @@ async def generate(request: web.Request) -> web.Response:
     if body is None:
         return _error("INVALID_REQUEST", "Expected a JSON object.", status=400)
 
-    required = ("mode", "creative_brief", "model_id", "session_id") if body.get("mode") == "Music3" else ("mode", "creative_brief", "model_id", "session_id", "aspect_ratio", "duration_seconds")
+    if body.get("mode") not in MODES:
+        return _error("INVALID_MODE", "The selected generation mode is not supported.", status=400)
+    # What a request must carry comes from the target's declared fields: an image
+    # target is not asked for a duration, and adding one later is a spec change,
+    # not another branch here.
+    required = ["mode", "model_id", "session_id"]
+    if not body.get("generic"):
+        # A compile driven by the generic prompt needs no brief; one driven by a
+        # brief still does.
+        required.append("creative_brief")
     missing = [key for key in required if not body.get(key)]
     if missing:
         return _error("INVALID_REQUEST", "Required fields are missing.", status=400, details={"fields": missing})
-    if body["mode"] not in MODES:
-        return _error("INVALID_MODE", "The selected MiniMax mode is not supported.", status=400)
 
     if not isinstance(body.get("thinking", False), bool) or not isinstance(body.get("unload_after", True), bool):
         return _error("INVALID_REQUEST", "Thinking and unload_after must be booleans.", status=400)
@@ -742,6 +775,27 @@ async def generate(request: web.Request) -> web.Response:
             "creative_brief": assembled["input"]["creative_brief"],
             "lyrics": assembled["input"].get("lyrics", ""),
         })
+        # Keep the compiled prompt (and the goal verdicts it was checked against)
+        # in the durable session, so switching targets shows the last prompt for
+        # each one and a restart does not lose the work.
+        if body.get("generic") or body.get("session_media"):
+            try:
+                state = session_store.load(body["session_id"])
+                session_store.record_output(
+                    state,
+                    body["mode"],
+                    prompt=result.get("prompt", ""),
+                    negative_prompt=result.get("negative_prompt", ""),
+                    variant=assembled["input"].get("variant"),
+                    audit=result.get("prompt_audit") or {},
+                )
+                if result.get("goals"):
+                    state["goals"] = result["goals"]
+                session_store.save(state)
+            except (session_store.SessionStoreError, OSError) as error:
+                # Persistence is a convenience here; never fail a finished
+                # generation because the state file could not be written.
+                write_event("session_persist_failed", request_id=request_id, error=str(error))
         write_event(
             "request_succeeded",
             request_id=request_id,
@@ -1331,3 +1385,4 @@ async def reorder_media(request: web.Request) -> web.Response:
 
 
 register_sequence_routes(routes, sys.modules[__name__])
+register_generic_routes(routes, sys.modules[__name__])

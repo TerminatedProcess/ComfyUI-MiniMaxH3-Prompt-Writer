@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .guides import MODE_GUIDES
+from .targets.h3 import H3
 from .scene_bible import (
     FIELDS,
     ORIGIN_ASSET,
@@ -23,7 +23,9 @@ from .scene_bible import (
     set_field,
 )
 
-VIDEO_MODES = tuple(m for m in MODE_GUIDES if m != "Music3")
+# H3's own modes, from the target that owns them. Sourcing this from the guide
+# map would now sweep in Krea 2 and Anima, which are stills and infer nothing.
+VIDEO_MODES = tuple(mode.id for mode in H3.modes)
 
 # H3 reference ceilings, from the official guide and the native node's slots.
 MAX_IMAGES = 9

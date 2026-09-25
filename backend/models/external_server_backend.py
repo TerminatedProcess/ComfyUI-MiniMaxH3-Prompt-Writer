@@ -540,8 +540,11 @@ class ExternalServerBackend:
                     seed: int | None,
                     thinking: bool,
                     purpose: str,
+                    structured: bool = False,
                 ) -> dict[str, Any]:
-                    del purpose
+                    # This backend never overrides the caller's sampling, so it
+                    # has nothing to do with either flag.
+                    del purpose, structured
                     if self.chat_handler is None:
                         raise ModelError(
                             "EXTERNAL_SERVER_UNAVAILABLE",

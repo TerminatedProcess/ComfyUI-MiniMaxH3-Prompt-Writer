@@ -691,6 +691,8 @@ class OllamaBackend:
 
                 def complete(**kwargs: Any) -> dict[str, Any]:
                     kwargs.pop("purpose", None)
+                    # Neither backend overrides the caller's sampling.
+                    kwargs.pop("structured", None)
                     return self._chat_completion(self.model_name, runtime_plan, endpoint=endpoint, **kwargs)
 
                 result = run_h3_pipeline(

@@ -87,6 +87,9 @@ def audit_failures(audit: dict[str, Any]) -> list[str]:
     if audit.get("unexpected_audio_task"):
         failures.append("audio reference/reuse declared without a canonically requested uploaded audio reference")
     failures.extend(audit.get("explicit_constraint_violations") or [])
+    # A standing goal is a requirement, not a preference: an unmet one is a
+    # repairable failure exactly like a dropped locked fact.
+    failures.extend(audit.get("goal_violations") or [])
     return failures
 
 

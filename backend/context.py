@@ -29,6 +29,13 @@ CHAT_TEMPLATE_OVERHEAD_TOKENS = 384
 MINIMUM_OUTPUT_TOKENS = 1_536
 MUSIC_OUTPUT_TOKENS = 1_536
 STANDARD_OUTPUT_TOKENS = 2_048
+# One prose paragraph or one tag pair, not a sectioned H3 prompt.
+IMAGE_OUTPUT_TOKENS = 1_536
+# The generic prompt is a whole scene document -- 19 fields plus the phrase each
+# one was credited to -- so it needs materially more room than any single prompt.
+# Too small and the JSON is truncated mid-object, which reads as "the model did
+# not return a usable document" for what is really a budget problem.
+GENERIC_OUTPUT_TOKENS = 4_096
 THINKING_OUTPUT_TOKENS = 6_144
 LOCAL_THINKING_OUTPUT_TOKENS = 8_192
 
@@ -147,7 +154,21 @@ def estimate_visual_tokens(
 
 def non_thinking_output_tokens(assembled: dict[str, Any]) -> int:
     mode = assembled.get("input", {}).get("mode")
-    return MUSIC_OUTPUT_TOKENS if mode == "Music3" else STANDARD_OUTPUT_TOKENS
+    if assembled.get("generic_stage"):
+        return GENERIC_OUTPUT_TOKENS
+    # Each target declares how much room its output shape needs.
+    from .targets import TargetError, target_for_mode
+
+    budgets = {
+        "music": MUSIC_OUTPUT_TOKENS,
+        "image": IMAGE_OUTPUT_TOKENS,
+        "standard": STANDARD_OUTPUT_TOKENS,
+    }
+    try:
+        key = target_for_mode(mode).output_tokens
+    except TargetError:
+        key = "standard"
+    return budgets.get(key, STANDARD_OUTPUT_TOKENS)
 
 
 def plan_context(

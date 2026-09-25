@@ -165,6 +165,16 @@ def _proper_nouns(text: str) -> set[str]:
     return {w.lower() for w in _PROPER.findall(text) if w.lower() not in _STOPWORDS}
 
 
+# Public aliases: the generic prompt document reuses this token logic over a
+# different field set, and importing a private name across modules hides that.
+def distinctive_tokens(text: str) -> set[str]:
+    return _tokens(text)
+
+
+def proper_nouns(text: str) -> set[str]:
+    return _proper_nouns(text)
+
+
 def lock_violations(bible: dict[str, Any], prose: str) -> tuple[str, ...]:
     """Asset-locked fields whose distinctive words are missing from the prose.
 

@@ -361,7 +361,31 @@ class DirectMusicRuntimeTests(unittest.TestCase):
         exercise("Music3", model_info(projector=None))
         self.assertEqual(selections, [("Music3", True), ("T2VA", False), ("T2VA", True), ("Music3", True)])
 
-    def test_text_only_direct_model_rejects_visual_mode_before_load(self):
+    def test_text_only_direct_model_rejects_attached_visuals_before_load(self):
+        """The gate is the attachment, not the mode.
+
+        A text-only model cannot look at pictures, but it can write any target's
+        prompt from text alone -- including Reference, Krea 2 and Anima. Gating
+        on the mode instead blocked prompts it was perfectly able to write.
+        """
+        backend = GGUFBackend()
+        assembled = {
+            "messages": [{"role": "user", "content": "brief"}],
+            "media_inputs": [{"type": "image", "requires_capability": "images"}],
+            "input": {"mode": "Reference", "creative_brief": "brief"},
+        }
+
+        with self.assertRaises(ModelError) as raised:
+            backend.generate(
+                model_info(projector=None), assembled, "session",
+                thinking=False, seed=1, unload_after=False, runtime_plan=runtime_plan(),
+            )
+
+        self.assertEqual(raised.exception.code, "DIRECT_VISION_REQUIRED")
+        self.assertEqual(raised.exception.details["supported_modes"], ["Music3", "T2VA"])
+        self.assertIsNone(backend.model)
+
+    def test_text_only_direct_model_allows_visual_mode_with_no_media(self):
         backend = GGUFBackend()
         assembled = {
             "messages": [{"role": "user", "content": "brief"}],
@@ -375,9 +399,8 @@ class DirectMusicRuntimeTests(unittest.TestCase):
                 thinking=False, seed=1, unload_after=False, runtime_plan=runtime_plan(),
             )
 
-        self.assertEqual(raised.exception.code, "DIRECT_VISION_REQUIRED")
-        self.assertEqual(raised.exception.details["supported_modes"], ["T2VA", "Music3"])
-        self.assertIsNone(backend.model)
+        # It gets as far as loading the model, which is what this stub refuses.
+        self.assertEqual(raised.exception.code, "MODEL_LOAD_FAILED")
 
     def test_direct_model_without_template_control_rejects_thinking_before_load(self):
         backend = GGUFBackend()

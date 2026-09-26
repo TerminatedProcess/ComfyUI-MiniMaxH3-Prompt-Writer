@@ -99,25 +99,6 @@ class FlagCompositionTests(unittest.TestCase):
         self.assertIn("Preserve the source motion order.", loose)
         self.assertNotIn("but do not invent unsupported subject actions", loose)
 
-    def test_no_audio_silences_only_the_targets_that_can_write_sound(self):
-        """A still has no soundtrack, and Music 3 is the soundtrack."""
-        self.assertIn("return N/A for overall_soundscape", system_prompt_for_mode("T2VA", no_audio=True))
-        self.assertIn("return N/A for overall_soundscape", system_prompt_for_mode("Reference", no_audio=True))
-        self.assertNotIn("overall_soundscape", system_prompt_for_mode("T2VA"))
-        for mode in ("Krea2", "Anima", "Music3", "Music3Lyrics"):
-            self.assertEqual(
-                system_prompt_for_mode(mode, no_audio=True), system_prompt_for_mode(mode), mode,
-            )
-
-    def test_no_audio_still_honours_a_sound_the_user_asked_for(self):
-        contract = system_prompt_for_mode("T2VA", no_audio=True)
-        self.assertIn("An explicitly requested sound is still written in full", contract)
-
-    def test_only_h3_declares_the_no_audio_field(self):
-        self.assertTrue(targets.target_by_id("h3").declares("no_audio"))
-        for target_id in ("krea2", "anima", "music3"):
-            self.assertFalse(targets.target_by_id(target_id).declares("no_audio"), target_id)
-
     def test_naughty_adds_permission_without_removing_anything(self):
         base = system_prompt_for_mode("T2VA")
         naughty = system_prompt_for_mode("T2VA", nsfw=True)
@@ -149,13 +130,10 @@ class FlagCompositionTests(unittest.TestCase):
             variants = targets.target_for_mode(mode).variants or (None,)
             for nsfw in (False, True):
                 for story in (False, True):
-                    for no_audio in (False, True):
-                        for variant in variants:
-                            prompt = system_prompt_for_mode(
-                                mode, nsfw=nsfw, story=story, variant=variant, no_audio=no_audio,
-                            )
-                            self.assertGreater(len(prompt), 200, (mode, nsfw, story, no_audio, variant))
-                            self.assertNotIn("  ", prompt, (mode, nsfw, story, no_audio, variant))
+                    for variant in variants:
+                        prompt = system_prompt_for_mode(mode, nsfw=nsfw, story=story, variant=variant)
+                        self.assertGreater(len(prompt), 200, (mode, nsfw, story, variant))
+                        self.assertNotIn("  ", prompt, (mode, nsfw, story, variant))
 
     def test_compose_refuses_to_silently_skip_a_missing_clause(self):
         """A reworded wrapper must break loudly, not disable the flag in silence."""

@@ -25,11 +25,10 @@ class SessionStoreTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_a_new_session_starts_with_every_flag_on(self):
+    def test_a_new_session_starts_with_both_flags_on(self):
         state = session_store.load(SESSION)
         self.assertTrue(state["inputs"]["nsfw"])
         self.assertTrue(state["inputs"]["story"])
-        self.assertTrue(state["inputs"]["no_audio"])
         self.assertTrue(generic.is_empty(state["generic"]))
 
     def test_state_survives_a_reload(self):

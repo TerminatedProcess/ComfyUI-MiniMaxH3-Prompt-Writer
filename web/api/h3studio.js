@@ -33,7 +33,6 @@ export const getSystemPrompt = (mode, flags = {}) => {
   const query = new URLSearchParams();
   if (flags.nsfw !== undefined) query.set("nsfw", String(Boolean(flags.nsfw)));
   if (flags.story !== undefined) query.set("story", String(Boolean(flags.story)));
-  if (flags.no_audio !== undefined) query.set("no_audio", String(Boolean(flags.no_audio)));
   if (flags.variant) query.set("variant", flags.variant);
   const suffix = query.toString() ? `?${query}` : "";
   return request(`/system-prompt/${encodeURIComponent(mode)}${suffix}`);

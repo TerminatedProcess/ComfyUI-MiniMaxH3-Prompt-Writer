@@ -652,10 +652,9 @@ async def get_system_prompt(request: web.Request) -> web.Response:
     query = request.query
     nsfw = query.get("nsfw", "false").lower() == "true"
     story = query.get("story", "false").lower() == "true"
-    no_audio = query.get("no_audio", "false").lower() == "true"
     variant = query.get("variant") or None
     try:
-        prompt = system_prompt_for_mode(mode, nsfw=nsfw, story=story, variant=variant, no_audio=no_audio)
+        prompt = system_prompt_for_mode(mode, nsfw=nsfw, story=story, variant=variant)
         profile = profile_for_mode(mode)
     except (SystemPromptError, TargetError) as error:
         return _error(getattr(error, "code", "INVALID_MODE"), str(error), status=404)
@@ -664,7 +663,6 @@ async def get_system_prompt(request: web.Request) -> web.Response:
         "profile": profile,
         "nsfw": nsfw,
         "story": story,
-        "no_audio": no_audio,
         "variant": variant,
         "system_prompt": prompt,
     })

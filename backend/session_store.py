@@ -63,7 +63,6 @@ def new_state(session_id: str) -> dict[str, Any]:
             "aspect_ratio": "16:9",
             "nsfw": True,
             "story": True,
-            "no_audio": True,
         },
         "generic": generic.new_doc(),
         "goals": [],
@@ -87,7 +86,6 @@ def _normalized(raw: Any, session_id: str) -> dict[str, Any]:
         merged["brief"] = str(merged.get("brief") or "")[:8000]
         merged["nsfw"] = bool(merged.get("nsfw", True))
         merged["story"] = bool(merged.get("story", True))
-        merged["no_audio"] = bool(merged.get("no_audio", True))
         state["inputs"] = merged
     try:
         state["generic"] = generic.validate(raw.get("generic") or generic.new_doc())

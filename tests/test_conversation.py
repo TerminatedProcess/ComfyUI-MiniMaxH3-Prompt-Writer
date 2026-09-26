@@ -405,14 +405,6 @@ class InstructionTests(unittest.TestCase):
         self.assertIn("Story builder is ON", conversation.build_instructions(nsfw=False, story=True))
         self.assertIn("Story builder is OFF", conversation.build_instructions(nsfw=False, story=False))
 
-    def test_no_audio_keeps_sound_out_of_the_document(self):
-        text = conversation.build_instructions(nsfw=False, story=True, no_audio=True)
-        self.assertIn("leave dialogue, soundscape and music out", text)
-        self.assertNotIn("leave dialogue, soundscape and music out",
-                         conversation.build_instructions(nsfw=False, story=True))
-        self.assertIn("leave dialogue, soundscape and music out",
-                      conversation.turn_instructions(nsfw=False, story=False, no_audio=True))
-
     def test_naughty_permission_is_only_present_when_set(self):
         self.assertIn("Adult or explicit content is permitted", conversation.build_instructions(nsfw=True, story=True))
         self.assertNotIn("Adult or explicit", conversation.build_instructions(nsfw=False, story=True))

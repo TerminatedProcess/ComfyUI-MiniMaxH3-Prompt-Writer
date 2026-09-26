@@ -387,7 +387,6 @@ export function stagePayload(state) {
   const payload = {
     nsfw: session.inputs?.nsfw !== false,
     story: session.inputs?.story !== false,
-    no_audio: session.inputs?.no_audio !== false,
     session_media: true,
     goals: session.goals || [],
   };

@@ -50,10 +50,6 @@ FAITHFUL_BUILD_CLAUSE = (
     "Story builder is OFF: fill only the fields the brief or the reference media actually support, and leave "
     "everything else out."
 )
-NO_AUDIO_BUILD_CLAUSE = (
-    "The clip is silent or will be scored later: leave dialogue, soundscape and music out of the document "
-    "entirely unless the brief explicitly asks for a sound, a line of dialogue or music."
-)
 NSFW_BUILD_CLAUSE = (
     "Adult or explicit content is permitted where the brief calls for it; describe it plainly, without euphemism "
     "or refusal."
@@ -271,19 +267,15 @@ def quoted_from_brief(quote: Any, brief: str) -> bool:
     return text in _normalized_for_quote(brief)
 
 
-def build_instructions(*, nsfw: bool, story: bool, no_audio: bool = False) -> str:
+def build_instructions(*, nsfw: bool, story: bool) -> str:
     parts = [BUILD_INSTRUCTIONS, STORY_BUILD_CLAUSE if story else FAITHFUL_BUILD_CLAUSE]
-    if no_audio:
-        parts.append(NO_AUDIO_BUILD_CLAUSE)
     if nsfw:
         parts.append(NSFW_BUILD_CLAUSE)
     return "\n\n".join(parts)
 
 
-def turn_instructions(*, nsfw: bool, story: bool, no_audio: bool = False) -> str:
+def turn_instructions(*, nsfw: bool, story: bool) -> str:
     parts = [TURN_INSTRUCTIONS]
-    if no_audio:
-        parts.append(NO_AUDIO_BUILD_CLAUSE)
     if story:
         parts.append(
             "Story builder is ON, so you may also fill fields the user has not addressed when the change implies "
@@ -306,10 +298,9 @@ def assemble_build(
     story: bool,
     duration_seconds: float | None,
     aspect_ratio: str | None,
-    no_audio: bool = False,
 ) -> dict[str, Any]:
     """One request that reads the references and writes the whole document."""
-    instructions = build_instructions(nsfw=nsfw, story=story, no_audio=no_audio)
+    instructions = build_instructions(nsfw=nsfw, story=story)
     references = "\n".join(
         f"{asset.get('reference') or asset.get('filename')}: {asset.get('filename')} ({asset.get('type')})"
         for asset in manifest.get("assets", [])
@@ -345,7 +336,6 @@ def assemble_build(
             "media_manifest": manifest,
             "nsfw": nsfw,
             "story": story,
-            "no_audio": no_audio,
         },
         "media_inputs": media_inputs,
         "supporting_guides": [],
@@ -368,7 +358,6 @@ def assemble_turn(
     media_inputs: list[dict[str, Any]],
     nsfw: bool,
     story: bool,
-    no_audio: bool = False,
 ) -> dict[str, Any]:
     """One conversation turn.
 
@@ -377,7 +366,7 @@ def assemble_turn(
     alone, and asking the user to say which kind of correction they meant would
     put the mechanism in their way.
     """
-    instructions = turn_instructions(nsfw=nsfw, story=story, no_audio=no_audio)
+    instructions = turn_instructions(nsfw=nsfw, story=story)
     records = generic.records(doc)
     document = {
         key: {

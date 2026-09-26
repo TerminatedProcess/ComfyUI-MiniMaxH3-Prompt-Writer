@@ -79,9 +79,6 @@ export function createWriterStage(host) {
         <label class="h3ps-toggle-control" title="Invent supporting detail the brief leaves open, instead of staying literal">
           <input type="checkbox" data-stage-flag="story"><span></span>Story builder
         </label>
-        <label class="h3ps-toggle-control" title="The clip is silent or scored later, so the prompt does not invent a soundscape or music. A sound you ask for is still written.">
-          <input type="checkbox" data-stage-flag="no_audio"><span></span>No audio
-        </label>
       </div>
       <div class="h3ps-stage-actions">
         <button class="h3ps-primary-button h3ps-stage-build" type="button" data-stage-build>
@@ -441,9 +438,7 @@ export function createWriterStage(host) {
     session = { ...session, inputs: { ...session.inputs, ...patch } };
     applySession(await saveInputs({ session_id: host.sessionId(), ...patch }));
     // The Settings panel shows the contract composed with these flags, cached.
-    if ("nsfw" in patch || "story" in patch || "no_audio" in patch || "variant" in patch) {
-      host.invalidateSystemPrompts?.();
-    }
+    if ("nsfw" in patch || "story" in patch || "variant" in patch) host.invalidateSystemPrompts?.();
   }
 
   async function build() {

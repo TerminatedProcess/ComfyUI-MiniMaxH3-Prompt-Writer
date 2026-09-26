@@ -39,14 +39,11 @@ def _flags(body: dict[str, Any], mode: str) -> dict[str, Any]:
     the auditable baseline the flags edit.
     """
     target = _target(mode)
-    for key in ("nsfw", "story", "no_audio"):
+    for key in ("nsfw", "story"):
         if key in body and not isinstance(body[key], bool):
             raise AssemblyError("INVALID_REQUEST", f"{key} must be a boolean.", {"field": key})
     nsfw = bool(body.get("nsfw", True)) if target.declares("nsfw") else False
     story = bool(body.get("story", True)) if target.declares("story") else False
-    # On by default: most people add sound afterwards, and an invented soundscape
-    # is noise in the prompt for anyone who does.
-    no_audio = bool(body.get("no_audio", True)) if target.declares("no_audio") else False
     variant = None
     if target.variants:
         requested = body.get("variant") or target.default_variant
@@ -59,7 +56,7 @@ def _flags(body: dict[str, Any], mode: str) -> dict[str, Any]:
         variant = requested
     elif body.get("variant"):
         raise AssemblyError("INVALID_VARIANT", f"{target.label} has no variants.", {"field": "variant"})
-    return {"nsfw": nsfw, "story": story, "no_audio": no_audio, "variant": variant}
+    return {"nsfw": nsfw, "story": story, "variant": variant}
 
 
 def _validated_generic(body: dict[str, Any]) -> dict[str, Any] | None:
@@ -168,7 +165,7 @@ def _effective_system_prompt(
     mode: str,
     flags: dict[str, Any] | None = None,
 ) -> tuple[str, bool]:
-    resolved = flags or {"nsfw": False, "story": False, "no_audio": False, "variant": None}
+    resolved = flags or {"nsfw": False, "story": False, "variant": None}
     try:
         return resolve_system_prompt(
             mode,
@@ -176,7 +173,6 @@ def _effective_system_prompt(
             nsfw=bool(resolved.get("nsfw")),
             story=bool(resolved.get("story")),
             variant=resolved.get("variant"),
-            no_audio=bool(resolved.get("no_audio")),
         )
     except SystemPromptError as error:
         raise AssemblyError(error.code, error.message) from error
@@ -264,7 +260,7 @@ def _guide_messages(mode: str, system_prompt: str) -> list[dict[str, str]]:
     return messages
 
 
-def _final_contract(mode: str, task_text: str, *, no_audio: bool = False) -> str:
+def _final_contract(mode: str, task_text: str) -> str:
     if mode != "Reference":
         mode_rule = {
             "T2VA": "Preserve any explicit continuous-camera or no-cut instruction instead of introducing an unsupported cut.",
@@ -275,11 +271,7 @@ def _final_contract(mode: str, task_text: str, *, no_audio: bool = False) -> str
         return (
             f"Final grounding check: {mode_rule} "
             "If the brief does not explicitly request non-diegetic music, return N/A for non_diegetic_music. "
-            + (
-                "This clip is silent unless the brief says otherwise: return N/A for overall_soundscape too. "
-                if no_audio else ""
-            )
-            + "Return only the complete final MiniMax H3 prompt."
+            "Return only the complete final MiniMax H3 prompt."
         )
     explicit_edit = bool(re.search(
         r"\b(?:edit(?:ing)?|continue|continuation|extend|remix|re-cut)\b.{0,40}\bvideo\b|\bvideo\s+editing\b",
@@ -306,8 +298,6 @@ def _final_contract(mode: str, task_text: str, *, no_audio: bool = False) -> str
         "reused visual element through an appropriate <Subject N> while keeping <Video N> as its source provenance; do not "
         "automatically create a separate subject for ordinary motion transfer. "
         "If the brief does not explicitly request music, non_diegetic_music must be N/A. "
-        + ("Unless the brief explicitly asks for sound, overall_soundscape is N/A as well. " if no_audio else "")
-        + 
         "Use the official detail budget for grounded target composition, placement, lighting, atmosphere, camera treatment, "
         "supported action progression, and reference application; never pad solely to reach a word count. Return only the complete "
         "prompt with all six required sections in the official order and no commentary outside the prompt."
@@ -504,7 +494,7 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
         f"{established_block}"
         f"{_goal_block(goals)}"
         + (f"Creative brief:\n{brief}\n\n" if brief else "")
-        + _final_contract(mode, brief, no_audio=bool(flags.get("no_audio")))
+        + _final_contract(mode, brief)
     )
     guide = guide_for_mode(mode)
     return {
@@ -692,7 +682,7 @@ def assemble_refinement(
         "Each <Audio N> present in the Revision instruction is mutable in this rewrite: follow the instruction's "
         "meaning to decide whether that reference is present, absent, or changed in the revised prompt. Use only "
         "canonical reference tags listed in the current Reference manifest.\n\n"
-        f"{_final_contract(mode, current_prompt + ' ' + instruction, no_audio=bool(flags.get('no_audio')))}"
+        f"{_final_contract(mode, current_prompt + ' ' + instruction)}"
     )
     return {
         "schema_version": 1,

@@ -299,7 +299,6 @@ async function syncSystemPromptEditor(profile) {
       const result = await getSystemPrompt(requestMode, {
         nsfw: session?.inputs?.nsfw !== false,
         story: session?.inputs?.story !== false,
-        no_audio: session?.inputs?.no_audio !== false,
         variant: session?.target?.variant || null,
       });
       studio.systemPromptDefaults[result.profile] = result.system_prompt;

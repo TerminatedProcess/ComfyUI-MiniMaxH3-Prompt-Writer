@@ -116,23 +116,8 @@ class FlagTests(unittest.TestCase):
         self.assertIn("do not invent unsupported subject actions", content)
         self.assertNotIn("Adult, explicit", content)
 
-    def test_no_audio_defaults_on_for_video_and_is_absent_for_stills(self):
-        video = assemble_request(body("T2VA"))
-        self.assertTrue(video["input"]["no_audio"])
-        combined = user_message(video) + video["system_prompt"]["content"]
-        self.assertIn("do not have to invent sound", combined)
-        self.assertIn("N/A for overall_soundscape", combined)
-        still = assemble_request(body("Krea2"))
-        self.assertFalse(still["input"]["no_audio"])
-
-    def test_turning_no_audio_off_restores_the_soundscape(self):
-        assembled = assemble_request(body("T2VA", no_audio=False))
-        self.assertFalse(assembled["input"]["no_audio"])
-        self.assertNotIn("do not have to invent sound", assembled["system_prompt"]["content"])
-        self.assertNotIn("N/A for overall_soundscape", user_message(assembled))
-
     def test_a_non_boolean_flag_is_refused(self):
-        for flag in ("story", "nsfw", "no_audio"):
+        for flag in ("story", "nsfw"):
             with self.assertRaises(AssemblyError):
                 assemble_request(body("T2VA", **{flag: "yes"}))
 

@@ -41,12 +41,11 @@ def _manifest(session_id: str) -> dict[str, Any]:
         return {"session_id": session_id, "mode": SESSION_MEDIA_MODE, "assets": [], "valid": True}
 
 
-def _flags(state: dict[str, Any], body: dict[str, Any]) -> tuple[bool, bool, bool]:
+def _flags(state: dict[str, Any], body: dict[str, Any]) -> tuple[bool, bool]:
     inputs = state.get("inputs", {})
     nsfw = body.get("nsfw", inputs.get("nsfw", True))
     story = body.get("story", inputs.get("story", True))
-    no_audio = body.get("no_audio", inputs.get("no_audio", True))
-    return bool(nsfw), bool(story), bool(no_audio)
+    return bool(nsfw), bool(story)
 
 
 def register_generic_routes(routes, services) -> None:
@@ -158,7 +157,7 @@ def register_generic_routes(routes, services) -> None:
             if body["aspect_ratio"] not in ASPECT_RATIOS:
                 return services._error("INVALID_ASPECT_RATIO", "The selected aspect ratio is not supported.", status=400)
             inputs["aspect_ratio"] = body["aspect_ratio"]
-        for flag in ("nsfw", "story", "no_audio"):
+        for flag in ("nsfw", "story"):
             if flag in body:
                 if not isinstance(body[flag], bool):
                     return services._error("INVALID_REQUEST", f"{flag} must be a boolean.", status=400)
@@ -208,7 +207,7 @@ def register_generic_routes(routes, services) -> None:
             return error(err)
         body["session_id"] = session_id
         state = session_store.load(session_id)
-        nsfw, story, no_audio = _flags(state, body)
+        nsfw, story = _flags(state, body)
         brief = str(body.get("brief") if body.get("brief") is not None else state["inputs"].get("brief") or "").strip()
         manifest = _manifest(session_id)
         if not brief and not manifest.get("assets"):
@@ -218,9 +217,7 @@ def register_generic_routes(routes, services) -> None:
                 status=400,
                 details={"field": "brief"},
             )
-        state["inputs"] = {
-            **state["inputs"], "brief": brief[:8000], "nsfw": nsfw, "story": story, "no_audio": no_audio,
-        }
+        state["inputs"] = {**state["inputs"], "brief": brief[:8000], "nsfw": nsfw, "story": story}
         # A rebuild keeps what the user has already fixed by hand or in
         # conversation; only invented and unspecified fields are rewritten.
         doc = state["generic"] if body.get("keep_established", True) else generic.new_doc()
@@ -233,7 +230,6 @@ def register_generic_routes(routes, services) -> None:
             goals=state["goals"],
             nsfw=nsfw,
             story=story,
-            no_audio=no_audio,
             duration_seconds=state["inputs"].get("duration_seconds"),
             aspect_ratio=state["inputs"].get("aspect_ratio"),
         )
@@ -294,7 +290,7 @@ def register_generic_routes(routes, services) -> None:
                 "Generate the generic prompt first, then steer it here.",
                 status=409,
             )
-        nsfw, story, no_audio = _flags(state, body)
+        nsfw, story = _flags(state, body)
         manifest = _manifest(session_id)
         session_store.record_turn(state, "user", message)
         assembled = conversation.assemble_turn(
@@ -307,7 +303,6 @@ def register_generic_routes(routes, services) -> None:
             media_inputs=_media_inputs(manifest.get("assets", [])),
             nsfw=nsfw,
             story=story,
-            no_audio=no_audio,
         )
         try:
             text = await _single_call(body, assembled)

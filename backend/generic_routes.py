@@ -178,6 +178,13 @@ def register_generic_routes(routes, services) -> None:
 
     @routes.post(f"{prefix}/session/reset")
     async def reset_session(request: web.Request) -> web.Response:
+        """Clear the session, or just the prompts in it.
+
+        `scope: "prompts"` keeps what you supplied -- media, brief, flags, goals
+        and the conversation -- and drops only what was generated from it: the
+        generic prompt and every compiled prompt. "Clear prompts" that left the
+        document standing was the bug this scope fixes.
+        """
         body = await services._json_body(request) or {}
         try:
             session_id = _session_id(body)
@@ -186,13 +193,21 @@ def register_generic_routes(routes, services) -> None:
         busy = services._generation_busy_error()
         if busy is not None:
             return busy
-        state = session_store.reset(session_id)
-        if body.get("clear_media", True):
-            try:
-                STORE.clear_mode(session_id, SESSION_MEDIA_MODE)
-            except MediaError:
-                pass
-        return _state_response(state, session_id, reset=True)
+        scope = str(body.get("scope") or "all")
+        if scope not in {"all", "prompts"}:
+            return services._error("INVALID_REQUEST", "Unknown reset scope.", status=400)
+        if scope == "prompts":
+            state = session_store.load(session_id)
+            state["generic"] = generic.new_doc()
+            state["outputs"] = {}
+        else:
+            state = session_store.reset(session_id)
+            if body.get("clear_media", True):
+                try:
+                    STORE.clear_mode(session_id, SESSION_MEDIA_MODE)
+                except MediaError:
+                    pass
+        return _state_response(state, session_id, reset=True, scope=scope)
 
     @routes.post(f"{prefix}/generic/build")
     async def build_generic(request: web.Request) -> web.Response:
@@ -218,6 +233,14 @@ def register_generic_routes(routes, services) -> None:
                 details={"field": "brief"},
             )
         state["inputs"] = {**state["inputs"], "brief": brief[:8000], "nsfw": nsfw, "story": story}
+        # Persisted before the model call, not after: the merge that protects a
+        # concurrent edit re-reads inputs from disk, so anything written only in
+        # this handler's copy would be dropped -- which lost the brief the build
+        # was started with.
+        try:
+            session_store.save(state)
+        except (OSError, session_store.SessionStoreError):
+            pass
         # A rebuild keeps what the user has already fixed by hand or in
         # conversation; only invented and unspecified fields are rewritten.
         doc = state["generic"] if body.get("keep_established", True) else generic.new_doc()
@@ -269,6 +292,45 @@ def register_generic_routes(routes, services) -> None:
         return _state_response(
             state, session_id, changed=list(changed), protected=list(protected), retried=retried,
         )
+
+    @routes.post(f"{prefix}/generic/expand")
+    async def expand_brief(request: web.Request) -> web.Response:
+        """Rewrite the brief itself, on demand. Never a side effect of a flag."""
+        body = await services._json_body(request)
+        if body is None:
+            return services._error("INVALID_REQUEST", "Expected a JSON object.", status=400)
+        try:
+            session_id = _session_id(body)
+        except session_store.SessionStoreError as err:
+            return error(err)
+        body["session_id"] = session_id
+        state = session_store.load(session_id)
+        nsfw, story = _flags(state, body)
+        brief = str(body.get("brief") if body.get("brief") is not None else state["inputs"].get("brief") or "").strip()
+        if not brief:
+            return services._error(
+                "INVALID_REQUEST", "Write a brief first, then expand it.", status=400, details={"field": "brief"},
+            )
+        manifest = _manifest(session_id)
+        assembled = conversation.assemble_expand(
+            session_id=session_id,
+            brief=brief,
+            manifest=manifest,
+            media_inputs=_media_inputs(manifest.get("assets", [])),
+            nsfw=nsfw,
+            story=story,
+        )
+        try:
+            text = await _single_call(body, assembled)
+            expanded = conversation.clean_expanded_brief(text)
+        except ModelError as err:
+            status = 499 if err.code == "GENERATION_CANCELLED" else services._model_error_status(err)
+            return services._error(err.code, err.message, status=status, details=err.details)
+        except conversation.ConversationError as err:
+            return error(err, status=502)
+        # The previous wording travels back so the studio can offer an undo.
+        state["inputs"] = {**state["inputs"], "brief": expanded}
+        return _state_response(state, session_id, brief=expanded, previous_brief=brief)
 
     @routes.post(f"{prefix}/generic/turn")
     async def generic_turn(request: web.Request) -> web.Response:

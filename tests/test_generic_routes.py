@@ -268,6 +268,74 @@ class GenericRouteTests(unittest.TestCase):
             "session_id": SESSION, "model_id": "m", "brief": "a woman on a bridge in a blue skirt",
         })
 
+    # -- clearing -------------------------------------------------------
+
+    def test_clearing_prompts_clears_the_generic_prompt_but_keeps_your_work(self):
+        """The reported bug: Clear prompts left the actual prompt standing."""
+        self.answers.append(json.dumps({"scene": {"subject": "Bob", "mood": "wistful"}}))
+        self.call("POST", "/generic/build", {"session_id": SESSION, "model_id": "m", "brief": "Bob waits"})
+        self.call("POST", "/goals", {"session_id": SESSION, "text": "never mention a brand"})
+        state = session_store.load(SESSION)
+        session_store.record_output(state, "Krea2", prompt="a compiled prose prompt")
+        session_store.save(state)
+
+        status, payload = self.call("POST", "/session/reset", {"session_id": SESSION, "scope": "prompts"})
+        self.assertEqual(status, 200)
+        session = payload["session"]
+        self.assertEqual(session["unspecified"], list(generic.FIELDS), "the document is gone")
+        self.assertEqual(session["outputs"], {}, "the compiled prompts are gone")
+        self.assertEqual(session["inputs"]["brief"], "Bob waits", "the brief is yours and stays")
+        self.assertEqual(len(session["goals"]), 1, "goals are yours and stay")
+        self.assertTrue(session["conversation"], "the conversation stays")
+
+    def test_clearing_everything_takes_the_goals_and_the_conversation_too(self):
+        self.answers.append(json.dumps({"scene": {"subject": "Bob"}}))
+        self.call("POST", "/generic/build", {"session_id": SESSION, "model_id": "m", "brief": "Bob waits"})
+        self.call("POST", "/goals", {"session_id": SESSION, "text": "never mention a brand"})
+        _status, payload = self.call("POST", "/session/reset", {"session_id": SESSION, "scope": "all"})
+        self.assertEqual(payload["session"]["goals"], [])
+        self.assertEqual(payload["session"]["conversation"], [])
+        self.assertEqual(payload["session"]["inputs"]["brief"], "")
+
+    def test_an_unknown_clear_scope_is_refused(self):
+        status, payload = self.call("POST", "/session/reset", {"session_id": SESSION, "scope": "half"})
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "INVALID_REQUEST")
+
+    # -- expanding the brief ---------------------------------------------
+
+    def test_expanding_rewrites_the_brief_and_hands_back_the_previous_wording(self):
+        self.answers.append("A lone bicycle courier crosses a rain-dark rooftop at blue hour, sets a glowing "
+                            "parcel on a bench and watches the city lights come on below.")
+        status, payload = self.call("POST", "/generic/expand", {
+            "session_id": SESSION, "model_id": "m", "brief": "a courier on a rooftop",
+        })
+        self.assertEqual(status, 200)
+        self.assertIn("blue hour", payload["brief"])
+        self.assertEqual(payload["previous_brief"], "a courier on a rooftop")
+        self.assertEqual(payload["session"]["inputs"]["brief"], payload["brief"])
+
+    def test_expanding_refuses_an_answer_that_is_not_a_brief(self):
+        for answer in ("## Scene\nA courier.", "detailed_description: [Shot 1] a courier", "- a courier"):
+            self.answers.append(answer)
+            status, payload = self.call("POST", "/generic/expand", {
+                "session_id": SESSION, "model_id": "m", "brief": "a courier on a rooftop",
+            })
+            self.assertEqual(status, 502, answer)
+            self.assertEqual(payload["error"]["code"], "INVALID_BRIEF_EXPANSION", answer)
+
+    def test_expanding_an_empty_brief_says_to_write_one(self):
+        status, payload = self.call("POST", "/generic/expand", {"session_id": SESSION, "model_id": "m", "brief": "  "})
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["details"]["field"], "brief")
+
+    def test_a_refused_expansion_leaves_the_brief_alone(self):
+        self.call("POST", "/session/inputs", {"session_id": SESSION, "brief": "a courier on a rooftop"})
+        self.answers.append("## Scene")
+        self.call("POST", "/generic/expand", {"session_id": SESSION, "model_id": "m"})
+        _status, session = self.call("GET", "/session", query={"session_id": SESSION})
+        self.assertEqual(session["session"]["inputs"]["brief"], "a courier on a rooftop")
+
     def test_a_turn_before_a_build_is_refused_with_a_reason(self):
         status, payload = self.call("POST", "/generic/turn", {
             "session_id": SESSION, "model_id": "m", "message": "make the skirt red",

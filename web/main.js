@@ -887,6 +887,12 @@ function clearCurrentPrompts({ notify = true } = {}) {
   syncModifiedState();
 
   saveCurrentModeDraft();
+  // The generic prompt and the compiled prompts live in the session, so clearing
+  // the editor alone left the actual prompt standing.
+  if (studio.stage && studio.mode !== "Music3") {
+    studio.stage.clear({ scope: "prompts", clearMedia: false, confirm: false, notify }).catch(() => {});
+    return true;
+  }
   if (notify) {
     const detail = studio.mode === "Music3"
       ? "The Music Brief and generated caption were cleared. Lyrics and media were kept."
@@ -922,6 +928,12 @@ async function clearEverything() {
     return;
   }
   clearCurrentPrompts({ notify: false });
+  if (studio.stage && studio.mode !== "Music3") {
+    // Clear all is the whole session: document, goals, conversation, outputs.
+    await studio.stage.clear({ scope: "all", clearMedia: true, confirm: false, notify: false }).catch(() => {});
+    showToast("Everything cleared", "Media, brief, generic prompt, goals, conversation and compiled prompts were removed.");
+    return;
+  }
   const detail = studio.mode === "Music3"
     ? "Media, Music Brief and generated caption were removed. Lyrics were kept."
     : "Media, Creative Brief and generated prompt were removed.";
@@ -3769,6 +3781,7 @@ function createStudio() {
     sessionId: () => studio.sessionId,
     assets: () => studio.assets,
     briefValue: () => root.querySelector("[data-video-brief]").value,
+    briefElement: () => root.querySelector("[data-video-brief]"),
     currentMode: () => studio.mode,
     // One inference payload for the generic-stage calls too, so the build and the
     // conversation run on the model the user picked in Settings.

@@ -21,6 +21,7 @@ import {
   buildGeneric,
   changeGoal,
   editGenericField,
+  expandBrief,
   getSession,
   getTargets,
   resetSession,
@@ -58,6 +59,8 @@ export function createWriterStage(host) {
   // Which target (if any) is following the attached media rather than a mode the
   // user pinned. Held here, not persisted: pinning a mode is the exception.
   let autoTargetId = null;
+  // The wording before the last expansion, for a single undo.
+  let previousBrief = null;
 
   const query = (selector) => root.querySelector(selector);
 
@@ -80,6 +83,7 @@ export function createWriterStage(host) {
           <input type="checkbox" data-stage-flag="story"><span></span>Story builder
         </label>
       </div>
+      <p class="h3ps-stage-flag-effect" data-flag-effect></p>
       <div class="h3ps-stage-actions">
         <button class="h3ps-primary-button h3ps-stage-build" type="button" data-stage-build>
           ${icon("spark", 15)}<span data-stage-build-label>Generate generic prompt</span>
@@ -103,7 +107,19 @@ export function createWriterStage(host) {
     // Order: flags, brief, Generate, conversation.
     authoring.append(left);
     const brief = inputs.querySelector(".h3ps-brief");
-    if (brief) left.querySelector(".h3ps-stage-actions").before(brief);
+    if (brief) {
+      const tools = root.ownerDocument.createElement("div");
+      tools.className = "h3ps-brief-tools";
+      tools.innerHTML = `
+        <button class="h3ps-text-button" type="button" data-brief-expand
+                title="Rewrite your brief as a fuller one, in your words. You can read it, edit it or undo it.">
+          Expand brief
+        </button>
+        <button class="h3ps-text-button" type="button" data-brief-undo hidden>Undo expand</button>`;
+      const anchor = left.querySelector(".h3ps-stage-actions");
+      anchor.before(brief);
+      anchor.before(tools);
+    }
 
     const output = query(".h3ps-output-panel");
     const right = document.createElement("div");
@@ -252,10 +268,19 @@ export function createWriterStage(host) {
 
   function renderSummary() {
     const total = session.field_order.length;
+    const origins = session.field_order.map((key) => session.fields[key]?.origin);
     const filled = session.field_order.filter((key) => session.fields[key]?.value).length;
-    const locked = session.field_order.filter((key) => ["asset", "user", "override"].includes(session.fields[key]?.origin)).length;
+    const locked = origins.filter((origin) => ["asset", "user", "override"].includes(origin)).length;
+    const invented = origins.filter((origin) => origin === "invented").length;
+    // Counting the invented and unspecified fields is how Story builder becomes
+    // legible after the fact: off, the second number grows instead of the first.
     const summary = filled
-      ? `${filled} of ${total} fields · ${locked} locked into every prompt`
+      ? [
+          `${filled} of ${total} fields`,
+          `${locked} locked into every prompt`,
+          invented ? `${invented} invented` : "",
+          total - filled ? `${total - filled} not specified` : "",
+        ].filter(Boolean).join(" · ")
       : "Not built yet";
     query("[data-generic-summary]").textContent = summary;
     const empty = !filled;
@@ -328,6 +353,17 @@ export function createWriterStage(host) {
     root.querySelectorAll("[data-stage-flag]").forEach((input) => {
       input.checked = session.inputs?.[input.dataset.stageFlag] !== false;
     });
+    // Say what the switches will do, before a generation proves it. They edit a
+    // system prompt nobody reads, so without this they are invisible until the
+    // output lands -- and by then it is too late to have chosen differently.
+    const story = session.inputs?.story !== false;
+    const nsfw = session.inputs?.nsfw !== false;
+    query("[data-flag-effect]").textContent = [
+      story
+        ? "Gaps get invented detail you can replace."
+        : "Only what you or your references supply; gaps stay unspecified.",
+      nsfw ? "Adult content is allowed where you ask for it." : "Kept non-explicit.",
+    ].join(" ");
   }
 
   function render() {
@@ -401,7 +437,7 @@ export function createWriterStage(host) {
 
   function syncBusy() {
     const disabled = busy || host.requestBusy();
-    root.querySelectorAll("[data-stage-build], [data-stage-send], [data-stage-compile], [data-stage-reset]")
+    root.querySelectorAll("[data-stage-build], [data-stage-send], [data-stage-compile], [data-stage-reset], [data-brief-expand], [data-brief-undo]")
       .forEach((button) => { button.disabled = disabled; });
   }
 
@@ -475,13 +511,51 @@ export function createWriterStage(host) {
     });
   }
 
-  async function reset() {
-    if (!host.confirmReset()) return;
-    await withBusy("Resetting", async () => {
-      applySession(await resetSession({ session_id: host.sessionId(), clear_media: true }));
-      host.afterReset();
-      host.notify("Session reset", "The generic prompt, goals, conversation and compiled prompts were cleared.");
+  /** Rewrite the brief in place, keeping the previous wording for one undo. */
+  async function expand() {
+    const box = host.briefElement?.();
+    const before = host.briefValue().trim();
+    if (!before) {
+      host.notify("Nothing to expand", "Write a line or two first, then expand it.");
+      return;
+    }
+    await withBusy("Expanding the brief", async () => {
+      const payload = await expandBrief({ ...host.inferencePayload(), session_id: host.sessionId(), brief: before });
+      applySession(payload);
+      if (box && payload.brief) box.value = payload.brief;
+      previousBrief = payload.previous_brief ?? before;
+      query("[data-brief-undo]").hidden = false;
+      host.notify("Brief expanded", "Read it over and edit anything you disagree with, or undo it.");
     });
+  }
+
+  async function undoExpand() {
+    const box = host.briefElement?.();
+    if (previousBrief === null) return;
+    if (box) box.value = previousBrief;
+    await withBusy("Restoring", async () => {
+      applySession(await saveInputs({ session_id: host.sessionId(), brief: previousBrief }));
+    });
+    previousBrief = null;
+    query("[data-brief-undo]").hidden = true;
+  }
+
+  async function reset({ scope = "all", clearMedia = true, confirm = true, notify = true } = {}) {
+    if (confirm && !host.confirmReset()) return false;
+    let done = false;
+    await withBusy(scope === "prompts" ? "Clearing prompts" : "Resetting", async () => {
+      applySession(await resetSession({ session_id: host.sessionId(), scope, clear_media: clearMedia }));
+      if (scope === "all") host.afterReset();
+      done = true;
+      if (!notify) return;
+      host.notify(
+        scope === "prompts" ? "Prompts cleared" : "Session reset",
+        scope === "prompts"
+          ? "The generic prompt and every compiled prompt were cleared. Your media, brief, goals and conversation were kept."
+          : "The generic prompt, goals, conversation and compiled prompts were cleared.",
+      );
+    });
+    return done;
   }
 
   function startEdit(row) {
@@ -522,8 +596,10 @@ export function createWriterStage(host) {
       input.addEventListener("change", () => persistInputs({ [input.dataset.stageFlag]: input.checked }));
     });
     query("[data-stage-build]").addEventListener("click", build);
+    query("[data-brief-expand]")?.addEventListener("click", expand);
+    query("[data-brief-undo]")?.addEventListener("click", undoExpand);
     query("[data-stage-send]").addEventListener("click", send);
-    query("[data-stage-reset]").addEventListener("click", reset);
+    query("[data-stage-reset]").addEventListener("click", () => reset());
     query("[data-stage-compile]").addEventListener("click", () => host.compile());
     query("[data-stage-message]").addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); send(); }
@@ -630,6 +706,8 @@ export function createWriterStage(host) {
       return session;
     },
     refresh: async () => applySession(await getSession(host.sessionId())),
+    /** Clear scope: "prompts" keeps what you supplied, "all" is Reset. */
+    clear: (options) => reset(options),
     /** Called when media is added or removed, so an automatic target follows it. */
     mediaChanged() {
       applyAuto();

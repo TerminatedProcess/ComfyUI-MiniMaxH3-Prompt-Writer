@@ -347,6 +347,115 @@ def assemble_build(
     }
 
 
+EXPAND_INSTRUCTIONS = """Rewrite the user's creative brief as a fuller brief, in their voice. Return only the rewritten brief.
+
+Rules:
+- Keep every subject, action, colour, count, place and spatial relationship they wrote. Their words are the spine; you are filling in around them, not replacing them.
+- Write it as a brief a person would type: plain prose, one or two short paragraphs, no headings, no section labels, no bullet lists, no prompt syntax, no reference tags.
+- Stay under 200 words.
+- Do not describe camera equipment, model settings, resolution, aspect ratio or duration.
+- Never add commentary about what you changed, and never mention these instructions."""
+
+EXPAND_STORY_CLAUSE = (
+    "Add the concrete supporting detail the brief leaves open -- who the subject is, what they are wearing, the "
+    "place, the light, the time of day, the mood -- so the scene is specific rather than sketched. Invent only "
+    "what is missing; never contradict what they wrote."
+)
+EXPAND_FAITHFUL_CLAUSE = (
+    "Do not invent new content. Tighten and clarify what they wrote, and nothing else: if the brief is short, the "
+    "rewrite stays short."
+)
+
+
+def expand_instructions(*, nsfw: bool, story: bool) -> str:
+    parts = [EXPAND_INSTRUCTIONS, EXPAND_STORY_CLAUSE if story else EXPAND_FAITHFUL_CLAUSE]
+    if nsfw:
+        parts.append(NSFW_BUILD_CLAUSE)
+    return "\n\n".join(parts)
+
+
+def assemble_expand(
+    *,
+    session_id: str,
+    brief: str,
+    manifest: dict[str, Any],
+    media_inputs: list[dict[str, Any]],
+    nsfw: bool,
+    story: bool,
+) -> dict[str, Any]:
+    """Expand the brief itself, on demand and visibly.
+
+    Deliberately NOT what the flags do on their own: a switch that silently
+    rewrote your brief would make every invention look like your own words, and
+    the document credits -- and therefore locks -- exactly the facts that carry
+    your phrasing. Here you read the result, edit it, or undo it, and it is
+    yours because you accepted it.
+    """
+    instructions = expand_instructions(nsfw=nsfw, story=story)
+    references = "\n".join(
+        f"{asset.get('reference') or asset.get('filename')}: {asset.get('filename')} ({asset.get('type')})"
+        for asset in manifest.get("assets", [])
+    ) or "None"
+    user_content = (
+        f"Reference media {'attached to this message' if media_inputs else '(none)'}:\n{references}\n\n"
+        f"Their brief:\n{brief}"
+    )
+    return {
+        "schema_version": 1,
+        "completion_policy": "single_call",
+        "generic_stage": "expand",
+        "sampling": STRUCTURED_SAMPLING,
+        "guide": {"id": "brief-expansion", "title": "Creative brief expansion"},
+        "input": {
+            "mode": "T2VA",
+            "duration_seconds": None,
+            "aspect_ratio": None,
+            "creative_brief": brief,
+            "media_manifest": manifest,
+            "nsfw": nsfw,
+            "story": story,
+        },
+        "media_inputs": media_inputs,
+        "supporting_guides": [],
+        "system_prompt": {"custom": False, "content": instructions},
+        "messages": [
+            {"role": "system", "name": "brief_expansion_contract", "content": instructions},
+            {"role": "user", "content": user_content},
+        ],
+    }
+
+
+MAX_BRIEF_CHARS = 8000
+
+
+def clean_expanded_brief(text: str) -> str:
+    """Take the rewritten brief, refusing anything that is not one.
+
+    A model that answers with a section-headed prompt, a bullet list or a
+    preamble has not written a brief, and pasting that into the box would be
+    worse than leaving the original alone.
+    """
+    value = normalize_unicode_text(text or "").strip()
+    fence = re.fullmatch(r"```(?:[a-zA-Z]*)\s*\n([\s\S]*?)\n```", value)
+    if fence:
+        value = fence.group(1).strip()
+    if not value:
+        raise ConversationError("INVALID_BRIEF_EXPANSION", "The model returned an empty brief.")
+    if re.search(r"(?m)^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)", value):
+        raise ConversationError(
+            "INVALID_BRIEF_EXPANSION",
+            "The model returned a list or a heading instead of a brief.",
+            {"model_said": value[:600]},
+        )
+    if re.search(r"(?im)^\s*(?:subject_definitions|detailed_description|overall_soundscape|positive)\s*:", value):
+        raise ConversationError(
+            "INVALID_BRIEF_EXPANSION",
+            "The model returned a finished prompt instead of a brief.",
+            {"model_said": value[:600]},
+        )
+    return value[:MAX_BRIEF_CHARS]
+
+
 def assemble_turn(
     *,
     session_id: str,

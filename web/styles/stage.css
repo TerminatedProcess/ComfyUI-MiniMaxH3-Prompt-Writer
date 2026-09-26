@@ -21,6 +21,9 @@
 /* ---- left: flags, build, conversation ---------------------------------- */
 .h3ps-stage-left { display: flex; flex-direction: column; gap: calc(12px * var(--h3ps-interface-scale)); margin-top: calc(14px * var(--h3ps-interface-scale)); }
 .h3ps-stage-flags { display: flex; flex-wrap: wrap; gap: calc(16px * var(--h3ps-interface-scale)); padding: calc(10px * var(--h3ps-interface-scale)) calc(12px * var(--h3ps-interface-scale)); border: 1px solid var(--h3ps-border); border-radius: 9px; background: var(--h3ps-surface-2); }
+.h3ps-brief-tools { display: flex; justify-content: flex-end; gap: calc(10px * var(--h3ps-interface-scale)); margin-top: calc(-4px * var(--h3ps-interface-scale)); }
+.h3ps-brief-tools button[hidden] { display: none; }
+.h3ps-stage-flag-effect { margin: 0; color: var(--h3ps-muted); font-size: var(--h3ps-font-label); line-height: 1.5; }
 .h3ps-stage-actions { display: flex; align-items: center; gap: calc(10px * var(--h3ps-interface-scale)); }
 .h3ps-stage-build { flex: 1; }
 .h3ps-stage-reset { color: var(--h3ps-muted); }

@@ -25,6 +25,10 @@ const apiStub = `data:text/javascript;base64,${Buffer.from(`
   export const changeGoal = async (body) => { lastCall = ["goal", body]; return { session: globalThis.__stageSession }; };
   export const saveInputs = async (body) => { lastCall = ["inputs", body]; return { session: globalThis.__stageSession }; };
   export const resetSession = async (body) => { lastCall = ["reset", body]; return { session: globalThis.__stageSession }; };
+  export const expandBrief = async (body) => {
+    lastCall = ["expand", body];
+    return { session: globalThis.__stageSession, brief: "an expanded brief", previous_brief: body.brief };
+  };
 `).toString("base64")}`;
 const inferenceStub = `data:text/javascript;base64,${Buffer.from(
   await read("../web/mode_inference.js"),
@@ -187,6 +191,34 @@ const REGISTRY = {
 };
 
 /** The parts of the studio DOM the stage injects itself into. */
+function basicHost(root) {
+  return {
+    root,
+    icon: () => "",
+    sessionId: () => "11111111-2222-4333-8444-555555555555",
+    assets: () => [],
+    briefValue: () => "",
+    briefElement: () => root.querySelector("[data-video-brief]"),
+    currentMode: () => "Krea2",
+    inferencePayload: () => ({}),
+    requestBusy: () => false,
+    selectMode: () => {},
+    inferredModeSummary: () => "",
+    compile: () => {},
+    setStatus: () => {},
+    clearStatus: () => {},
+    notify: () => {},
+    notifyError: () => {},
+    confirmReset: () => false,
+    afterReset: () => {},
+    onSessionChanged: () => {},
+    outputIsReplaceable: () => true,
+    afterOutputReplaced: () => {},
+    copy: () => {},
+    applyInputs: () => {},
+  };
+}
+
 function mountRoot(window) {
   const root = window.document.createElement("div");
   root.innerHTML = `
@@ -385,6 +417,75 @@ test("the middle column holds the brief, the flags, Generate and the conversatio
 test("the workspace only goes to three columns for the writer flow", () => {
   assert.match(main, /const threeColumn = Boolean\(studio\.stage\) && !music && !studio\.sequence\?\.active;/);
   assert.match(main, /classList\.toggle\("is-three-column", threeColumn\)/);
+});
+
+test("the switches say what they will do before anything is generated", async () => {
+  const window = new Window();
+  const previousDocument = globalThis.document;
+  globalThis.document = window.document;
+  try {
+    const root = mountRoot(window);
+    globalThis.__stageRegistry = REGISTRY;
+    // story: false, nsfw: true, with one invented field so both counts show.
+    globalThis.__stageSession = {
+      ...SESSION,
+      fields: { ...SESSION.fields, mood: { value: "wistful", origin: "invented", observed: null } },
+      unspecified: [],
+      field_order: [...SESSION.field_order, "lighting"],
+      groups: [{ title: "Subject", fields: [...SESSION.field_order, "lighting"] }],
+      labels: { ...SESSION.labels, lighting: "Lighting" },
+    };
+    const stageInstance = stageModule.createWriterStage(basicHost(root));
+    await stageInstance.start();
+    const effect = root.querySelector("[data-flag-effect]").textContent;
+    assert.match(effect, /gaps stay unspecified/);
+    assert.match(effect, /Adult content is allowed/);
+    // And the card counts what each switch produced.
+    assert.match(root.querySelector("[data-generic-summary]").textContent, /1 invented/);
+    assert.match(root.querySelector("[data-generic-summary]").textContent, /not specified/);
+  } finally {
+    globalThis.document = previousDocument;
+    await window.happyDOM.close();
+  }
+});
+
+test("Expand brief rewrites the box on demand, and can be undone", async () => {
+  const window = new Window();
+  const previousDocument = globalThis.document;
+  globalThis.document = window.document;
+  try {
+    const root = mountRoot(window);
+    globalThis.__stageRegistry = REGISTRY;
+    globalThis.__stageSession = SESSION;
+    const box = root.querySelector("[data-video-brief]");
+    box.value = "a courier on a rooftop";
+    const stageInstance = stageModule.createWriterStage({
+      ...basicHost(root),
+      briefValue: () => box.value,
+      briefElement: () => box,
+    });
+    await stageInstance.start();
+    const api = await import(apiStub);
+
+    root.querySelector("[data-brief-expand]").click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(api.lastCall[0], "expand");
+    assert.equal(box.value, "an expanded brief");
+    assert.equal(root.querySelector("[data-brief-undo]").hidden, false);
+
+    root.querySelector("[data-brief-undo]").click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(box.value, "a courier on a rooftop", "undo restores the wording you wrote");
+    assert.equal(root.querySelector("[data-brief-undo]").hidden, true);
+  } finally {
+    globalThis.document = previousDocument;
+    await window.happyDOM.close();
+  }
+});
+
+test("clearing prompts reaches the session, not just the editor", () => {
+  assert.match(main, /studio\.stage\.clear\(\{ scope: "prompts", clearMedia: false/);
+  assert.match(main, /studio\.stage\.clear\(\{ scope: "all", clearMedia: true/);
 });
 
 test("the stage owns the flags, the build, the conversation and the delivery bar", () => {

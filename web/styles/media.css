@@ -55,3 +55,10 @@
 .h3ps-empty-drop:hover { border-color: rgba(232,97,60,.42); }
 .h3ps-empty-icon { display: grid; place-items: center; width: calc(31px * var(--h3ps-interface-scale)); height: calc(31px * var(--h3ps-interface-scale)); margin-bottom: 7px; border-radius: 8px; background: rgba(232,97,60,.1); color: var(--h3ps-accent); }
 .h3ps-empty-drop strong { font-size: var(--h3ps-font-body-sm); }.h3ps-empty-drop small { margin-top: 2px; color: var(--h3ps-muted); font-size: var(--h3ps-font-label); }
+
+/* Hover magnifier - a reference at a size you can actually judge (media_zoom.js) */
+.h3ps-media-zoom { position: fixed; z-index: 40; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.h3ps-media-zoom[hidden] { display: none; }
+.h3ps-media-zoom figure { margin: 0; padding: calc(8px * var(--h3ps-interface-scale)); border: 1px solid var(--h3ps-border-selection); border-radius: 10px; background: var(--h3ps-menu-surface); box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+.h3ps-media-zoom img { display: block; max-width: 60vw; max-height: 60vh; border-radius: 6px; object-fit: contain; background: var(--h3ps-media-well); }
+.h3ps-media-zoom figcaption { margin-top: calc(6px * var(--h3ps-interface-scale)); color: var(--h3ps-muted); font-size: var(--h3ps-font-label); text-align: center; }

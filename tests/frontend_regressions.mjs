@@ -5,6 +5,7 @@ import './media_visual.mjs';
 import './sequence.mjs';
 import "./writer_async.mjs";
 import "./writer_stage.mjs";
+import "./media_zoom.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";

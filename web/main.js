@@ -4,6 +4,7 @@ import { generationButtonMarkup, sequenceNotificationOptions, aspectRatioMarkup,
 import { mediaVisualDescriptor } from "./media_visual.js";
 import { createSequenceWorkspace } from "./sequence_workspace.js";
 import { createWriterStage } from "./writer_stage.js";
+import { createMediaZoom } from "./media_zoom.js";
 import { generateSequence, cancelSequence } from "./api/sequence.js";
 import { app } from "/scripts/app.js";
 import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, unloadModel, uploadMedia } from "./api/h3studio.js";
@@ -564,6 +565,10 @@ function renderMedia(mode) {
       </div>`;
   }
   notifyMediaCompatibility();
+  // A card can vanish from under the pointer -- media cleared, a replace, a
+  // re-render -- and the browser never fires pointerout for an element it just
+  // removed, stranding the magnifier over an empty zone.
+  studio.mediaZoom?.hide();
   studio.stage?.mediaChanged();
   bindMediaActions(mode);
   syncComposerControl(mode);
@@ -3725,6 +3730,13 @@ function createStudio() {
     error: (error) => showToast("Sequence", error.message, error.details || null, null, sequenceNotificationOptions(error)),
     copy: (text) => copyPromptText(text),
     insert: (editor, reference) => insertReferenceAtCaret(editor, reference, editor.selectionStart),
+  });
+  // Hovering a reference shows it at roughly 60% of the viewport; the cards are
+  // too small to check what is actually in a picture.
+  studio.mediaZoom = createMediaZoom({
+    root,
+    assets: () => studio.assets,
+    suppressed: () => Boolean(studio.draggedAssetId),
   });
   studio.stage = createWriterStage({
     root,

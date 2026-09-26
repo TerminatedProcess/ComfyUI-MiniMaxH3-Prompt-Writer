@@ -65,6 +65,10 @@ export function createWriterStage(host) {
 
   function mount() {
     const inputs = query("[data-video-inputs]");
+    const authoring = root.ownerDocument.createElement("section");
+    authoring.className = "h3ps-author-panel";
+    authoring.dataset.authorPanel = "";
+    query(".h3ps-output-panel").before(authoring);
     const left = document.createElement("div");
     left.className = "h3ps-stage-left";
     left.innerHTML = `
@@ -74,6 +78,9 @@ export function createWriterStage(host) {
         </label>
         <label class="h3ps-toggle-control" title="Invent supporting detail the brief leaves open, instead of staying literal">
           <input type="checkbox" data-stage-flag="story"><span></span>Story builder
+        </label>
+        <label class="h3ps-toggle-control" title="The clip is silent or scored later, so the prompt does not invent a soundscape or music. A sound you ask for is still written.">
+          <input type="checkbox" data-stage-flag="no_audio"><span></span>No audio
         </label>
       </div>
       <div class="h3ps-stage-actions">
@@ -94,7 +101,12 @@ export function createWriterStage(host) {
           <button class="h3ps-secondary-button" type="button" data-stage-send>${icon("spark", 14)} Send</button>
         </div>
       </section>`;
-    inputs.append(left);
+    // The brief seeds the document and the conversation steers it, so they
+    // belong together in the middle column; the left column stays references.
+    // Order: flags, brief, Generate, conversation.
+    authoring.append(left);
+    const brief = inputs.querySelector(".h3ps-brief");
+    if (brief) left.querySelector(".h3ps-stage-actions").before(brief);
 
     const output = query(".h3ps-output-panel");
     const right = document.createElement("div");
@@ -127,6 +139,7 @@ export function createWriterStage(host) {
         <p class="h3ps-generic-warning" data-generic-media-warning hidden></p>
       </section>
       <div class="h3ps-delivery-bar" data-delivery-bar>
+        <span class="h3ps-delivery-controls-slot" data-delivery-controls-slot></span>
         <span class="h3ps-delivery-model">
           <label for="h3ps-delivery-target">Model</label>
           <select id="h3ps-delivery-target" data-delivery-target></select>
@@ -151,6 +164,13 @@ export function createWriterStage(host) {
         <button class="h3ps-text-button" type="button" data-negative-copy>Copy</button></header>
       <textarea class="h3ps-editor h3ps-negative-editor" rows="2" spellcheck="false" data-negative-value aria-label="Negative prompt"></textarea>`;
     query(".h3ps-editor-wrap").after(negative);
+
+    // Duration and aspect ratio are delivery parameters, not scene facts: the
+    // same document should compile to a five-second clip or a fifteen-second
+    // one. Moved rather than rebuilt, so their existing bindings survive -- and
+    // if the stage never starts they stay where they were.
+    const controls = query("[data-delivery-controls]");
+    if (controls) query("[data-delivery-controls-slot]").append(controls);
 
     const audit = document.createElement("p");
     audit.className = "h3ps-goal-summary";
@@ -290,6 +310,12 @@ export function createWriterStage(host) {
         .map((variant) => `<option value="${escape(variant)}" ${variant === chosen ? "selected" : ""}>${escape(variant)}</option>`)
         .join("");
     }
+    // H3 counts shots against the duration; a still has no runtime at all.
+    const durationField = root.querySelector("[data-duration-field]");
+    if (durationField) durationField.hidden = !target?.fields?.includes("duration_seconds");
+    const aspectField = root.querySelector('[data-delivery-controls] [data-choice-toggle="aspect"]')?.closest(".h3ps-choice");
+    if (aspectField) aspectField.hidden = !target?.fields?.includes("aspect_ratio");
+
     const inferred = host.inferredModeSummary();
     const stale = outputIsStale(current);
     // Say it once, where the Generate button is: a prompt compiled before the
@@ -415,7 +441,9 @@ export function createWriterStage(host) {
     session = { ...session, inputs: { ...session.inputs, ...patch } };
     applySession(await saveInputs({ session_id: host.sessionId(), ...patch }));
     // The Settings panel shows the contract composed with these flags, cached.
-    if ("nsfw" in patch || "story" in patch || "variant" in patch) host.invalidateSystemPrompts?.();
+    if ("nsfw" in patch || "story" in patch || "no_audio" in patch || "variant" in patch) {
+      host.invalidateSystemPrompts?.();
+    }
   }
 
   async function build() {
@@ -579,6 +607,7 @@ export function createWriterStage(host) {
       mount();
       registry = await getTargets();
       applySession(await getSession(host.sessionId()));
+      host.applyInputs?.(session?.inputs);
       if (session?.target?.mode) {
         host.selectMode(session.target.mode, { silent: true });
       } else {

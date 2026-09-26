@@ -54,7 +54,7 @@ test("the mode follows what is attached, and never guesses L2VA", () => {
 
 test("a compile carries the generic document, the goals and both flags", () => {
   const session = {
-    inputs: { nsfw: false, story: true },
+    inputs: { nsfw: false, story: true, no_audio: false },
     goals: [{ id: "g1", text: "keep it one shot", enabled: true }],
     generic: { schema: "generic/1", fields: { subject: { value: "Bob", origin: "user" } } },
     fields: { subject: { value: "Bob", origin: "user" }, mood: { value: "", origin: "unspecified" } },
@@ -65,6 +65,7 @@ test("a compile carries the generic document, the goals and both flags", () => {
   const payload = stagePayload(state);
   assert.equal(payload.nsfw, false);
   assert.equal(payload.story, true);
+  assert.equal(payload.no_audio, false);
   assert.equal(payload.session_media, true);
   assert.equal(payload.variant, "aesthetic");
   assert.equal(payload.goals.length, 1);
@@ -81,6 +82,7 @@ test("an empty document is not sent, so a brief-only compile still works", () =>
   };
   const payload = stagePayload({ stage: { session: () => session, variantsFor: () => [] }, mode: "Krea2" });
   assert.equal(payload.generic, undefined);
+  assert.equal(payload.no_audio, true, "an unset flag defaults on");
   assert.equal(payload.session_media, true);
   assert.equal(payload.variant, undefined);
 });
@@ -110,6 +112,7 @@ test("the payload reads the stage's session the way the stage exports it", async
     assert.ok(payload.generic, "the document must reach the compile");
     assert.equal(payload.nsfw, true);
     assert.equal(payload.story, false);
+    assert.equal(payload.no_audio, true);
   } finally {
     globalThis.document = previousDocument;
     await window.happyDOM.close();
@@ -153,7 +156,7 @@ const SESSION = {
     { role: "user", text: "her skirt is red", changed: [], protected: [], goals_added: [] },
     { role: "assistant", text: "Done.", changed: ["wardrobe"], protected: ["subject"], goals_added: ["keep her skirt red"] },
   ],
-  inputs: { nsfw: true, story: false, brief: "a courier" },
+  inputs: { nsfw: true, story: false, no_audio: true, brief: "a courier" },
   outputs: { Krea2: { prompt: "a prose prompt", negative_prompt: "", audit: {}, generic_updated_at: 1 } },
   target: { mode: "Krea2", variant: null },
   media_missing: [{ filename: "hero.png" }],
@@ -190,7 +193,15 @@ const REGISTRY = {
 function mountRoot(window) {
   const root = window.document.createElement("div");
   root.innerHTML = `
-    <div data-video-inputs></div>
+    <section class="h3ps-input-panel">
+      <div data-video-inputs>
+        <div class="h3ps-control-grid" data-delivery-controls>
+          <label class="h3ps-field" data-duration-field><input data-duration-slider></label>
+          <label class="h3ps-field h3ps-choice"><button data-choice-toggle="aspect"></button></label>
+        </div>
+        <label class="h3ps-brief"><textarea data-video-brief></textarea></label>
+      </div>
+    </section>
     <section class="h3ps-output-panel">
       <div class="h3ps-editor-wrap"><textarea data-output></textarea></div>
       <div class="h3ps-output-actions"></div>
@@ -333,10 +344,57 @@ test("the controls on the card do what they say", async () => {
   }
 });
 
+test("the middle column holds the brief, the flags, Generate and the conversation", async () => {
+  const window = new Window();
+  const previousDocument = globalThis.document;
+  globalThis.document = window.document;
+  try {
+    const root = mountRoot(window);
+    globalThis.__stageRegistry = REGISTRY;
+    globalThis.__stageSession = SESSION;
+    const stageInstance = stageModule.createWriterStage({
+      root, icon: () => "", sessionId: () => "11111111-2222-4333-8444-555555555555",
+      assets: () => [], briefValue: () => "", currentMode: () => "Krea2",
+      inferencePayload: () => ({}), requestBusy: () => false, selectMode: () => {},
+      inferredModeSummary: () => "", compile: () => {}, setStatus: () => {}, clearStatus: () => {},
+      notify: () => {}, notifyError: () => {}, confirmReset: () => false, afterReset: () => {},
+      onSessionChanged: () => {}, outputIsReplaceable: () => true, afterOutputReplaced: () => {},
+      copy: () => {}, applyInputs: () => {},
+    });
+    await stageInstance.start();
+
+    const author = root.querySelector("[data-author-panel]");
+    assert.ok(author, "the authoring column exists");
+    // References stay left; the brief and the conversation move to the middle.
+    assert.ok(author.querySelector(".h3ps-brief"), "the brief moved into the authoring column");
+    assert.ok(author.querySelector("[data-stage-log]"), "the conversation is in the authoring column");
+    assert.ok(!root.querySelector("[data-video-inputs] .h3ps-brief"), "the brief left the media column");
+    // Order down the column: flags, brief, Generate, conversation.
+    const order = [...author.querySelectorAll(".h3ps-stage-flags, .h3ps-brief, .h3ps-stage-actions, .h3ps-stage-chat")]
+      .map((node) => node.className.split(" ")[0]);
+    assert.deepEqual(order, ["h3ps-stage-flags", "h3ps-brief", "h3ps-stage-actions", "h3ps-stage-chat"]);
+    // Duration and aspect ratio now sit with the model, not with the media.
+    const slot = root.querySelector("[data-delivery-controls-slot]");
+    assert.ok(slot.querySelector("[data-duration-field]"), "duration moved to the delivery bar");
+    assert.ok(!root.querySelector("[data-video-inputs] [data-delivery-controls]"));
+    // Krea 2 has no runtime, so the duration control is hidden for it.
+    assert.equal(root.querySelector("[data-duration-field]").hidden, true);
+  } finally {
+    globalThis.document = previousDocument;
+    await window.happyDOM.close();
+  }
+});
+
+test("the workspace only goes to three columns for the writer flow", () => {
+  assert.match(main, /const threeColumn = Boolean\(studio\.stage\) && !music && !studio\.sequence\?\.active;/);
+  assert.match(main, /classList\.toggle\("is-three-column", threeColumn\)/);
+});
+
 test("the stage owns the flags, the build, the conversation and the delivery bar", () => {
   for (const hook of [
     "data-stage-flag=\"nsfw\"",
     "data-stage-flag=\"story\"",
+    "data-stage-flag=\"no_audio\"",
     "data-stage-build",
     "data-stage-send",
     "data-stage-reset",
@@ -435,6 +493,7 @@ test("a compile refreshes the stored output, the audit badge and the goal verdic
 test("the Settings editor shows the default composed with the flags in force", () => {
   assert.match(main, /getSystemPrompt\(requestMode, \{/);
   assert.match(main, /nsfw: session\?\.inputs\?\.nsfw !== false/);
+  assert.match(main, /no_audio: session\?\.inputs\?\.no_audio !== false/);
   assert.match(main, /krea2: "Krea2"/);
   assert.match(main, /anima: "Anima"/);
 });
@@ -444,6 +503,15 @@ test("the left rail persists server-side so a restart restores it", () => {
   assert.match(main, /studio\.stage\?\.setAspectRatio\(value\)/);
   assert.match(main, /studio\.stage\?\.setBrief\(videoBrief\.value\)/);
   assert.match(main, /videoBrief\.addEventListener\("blur", persistBrief\)/);
+});
+
+test("the session owns the brief and the prompt; the old drafts stand down", () => {
+  // Two persistence layers for one field is how a reload came back with text
+  // from a session you were not in.
+  assert.match(main, /function draftsOwn\(mode\) \{/);
+  assert.match(main, /!studio\?\.stage \|\| mode === "Music3"/);
+  assert.match(main, /if \(!studio \|\| !draftsOwn\(studio\.mode\)\) return;/);
+  assert.match(main, /if \(!draftsOwn\(mode\) && isPersistedDraftMode\(mode\)\)/);
 });
 
 test("a saved brief is restored into an empty box, never over live typing", () => {

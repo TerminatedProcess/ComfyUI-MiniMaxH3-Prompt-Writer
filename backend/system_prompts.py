@@ -25,6 +25,7 @@ def system_prompt_for_mode(
     nsfw: bool = False,
     story: bool = False,
     variant: str | None = None,
+    no_audio: bool = False,
 ) -> str:
     """The contract for one mode, composed from the flags in force.
 
@@ -38,7 +39,7 @@ def system_prompt_for_mode(
     from .targets import TargetError, system_prompt_for
 
     try:
-        return system_prompt_for(mode, nsfw=nsfw, story=story, variant=variant)
+        return system_prompt_for(mode, nsfw=nsfw, story=story, variant=variant, no_audio=no_audio)
     except TargetError as error:
         raise SystemPromptError("INVALID_MODE", "The selected generation mode is not supported.") from error
 
@@ -50,9 +51,12 @@ def resolve_system_prompt(
     nsfw: bool = False,
     story: bool = False,
     variant: str | None = None,
+    no_audio: bool = False,
 ) -> tuple[str, bool]:
     if override is None:
-        return system_prompt_for_mode(mode, nsfw=nsfw, story=story, variant=variant), False
+        return system_prompt_for_mode(
+            mode, nsfw=nsfw, story=story, variant=variant, no_audio=no_audio,
+        ), False
     if not isinstance(override, str):
         raise SystemPromptError("INVALID_SYSTEM_PROMPT", "System Prompt must be text or null.")
     if len(override) > MAX_SYSTEM_PROMPT_CHARS:

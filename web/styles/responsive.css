@@ -275,6 +275,17 @@
 @media (max-width: 1250px) {
   .h3ps-workspace-toolbar,
   .h3ps-workspace { grid-template-columns: minmax(0, 46%) minmax(0, 54%); }
+  /* Three narrow columns stop being readable here. Rather than hide one -- the
+     brief and the conversation live in it now -- the references and authoring
+     columns stack into one, and delivery keeps its own. */
+  .h3ps-root.is-three-column .h3ps-workspace {
+    grid-template-columns: minmax(0, 46%) minmax(0, 54%);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "media delivery" "author delivery";
+  }
+  .h3ps-root.is-three-column .h3ps-input-panel { grid-area: media; }
+  .h3ps-root.is-three-column .h3ps-author-panel { grid-area: author; }
+  .h3ps-root.is-three-column .h3ps-output-panel { grid-area: delivery; }
   .h3ps-modes { min-width: 0; overflow-x: auto; scrollbar-width: none; }
   .h3ps-modes::-webkit-scrollbar { display: none; }
   .h3ps-modes button { flex: 0 0 auto; min-width: 88px; }
@@ -342,4 +353,14 @@
   .h3ps-root *::before,
   .h3ps-root *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   .h3ps-root .h3ps-spinner { animation-duration: .7s !important; animation-iteration-count: infinite !important; }
+}
+
+@media (max-width: 900px) {
+  /* One column: references, then authoring, then delivery -- the order you work in. */
+  .h3ps-root.is-three-column .h3ps-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas: "media" "author" "delivery";
+  }
+  .h3ps-root.is-three-column .h3ps-author-panel { border-right: 0; border-top: 1px solid var(--h3ps-border); }
 }

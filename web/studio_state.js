@@ -6,6 +6,7 @@ export const OLLAMA_ENDPOINT_MODELS_STORAGE_KEY = "h3ps-ollama-endpoint-models-v
 export const DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434";
 export const API_PROVIDER_STORAGE_KEY = "h3ps-api-provider-v1";
 export const USER_PREFERENCES_STORAGE_KEY = "h3ps-preferences-v1";
+export const SESSION_ID_STORAGE_KEY = "h3ps-session-id-v1";
 export const MODE_DRAFTS_STORAGE_KEY = "h3ps-mode-drafts-v1";
 export const INTERFACE_SIZES = ["100", "110", "120", "125"];
 
@@ -92,6 +93,22 @@ export function saveModeDrafts(storage, drafts) {
     return draft ? [[mode, draft]] : [];
   }));
   storage?.setItem(MODE_DRAFTS_STORAGE_KEY, JSON.stringify({ version: 1, drafts: safeDrafts }));
+}
+
+/**
+ * The session this browser is working in, kept across reloads.
+ *
+ * Minting a fresh id on every page load threw away the generic prompt, the
+ * goals, the conversation and the compiled prompts on a refresh -- everything
+ * the server had faithfully persisted was simply addressed to a session nobody
+ * asked for again. Reset is what clears a session; F5 is not.
+ */
+export function loadSessionId(storage = globalThis.localStorage, mint = () => "") {
+  const stored = storage?.getItem(SESSION_ID_STORAGE_KEY);
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(stored || "")) return stored;
+  const fresh = mint();
+  try { storage?.setItem(SESSION_ID_STORAGE_KEY, fresh); } catch {}
+  return fresh;
 }
 
 export function loadUserPreferences(storage = globalThis.localStorage) {
@@ -370,6 +387,7 @@ export function stagePayload(state) {
   const payload = {
     nsfw: session.inputs?.nsfw !== false,
     story: session.inputs?.story !== false,
+    no_audio: session.inputs?.no_audio !== false,
     session_media: true,
     goals: session.goals || [],
   };

@@ -24,6 +24,7 @@ import {
   INTERFACE_SIZES,
   loadOllamaModel,
   loadOllamaHost,
+  loadSessionId,
   loadUserPreferences,
   normalizeOllamaHost,
   saveApiProviderConfig,
@@ -298,6 +299,7 @@ async function syncSystemPromptEditor(profile) {
       const result = await getSystemPrompt(requestMode, {
         nsfw: session?.inputs?.nsfw !== false,
         story: session?.inputs?.story !== false,
+        no_audio: session?.inputs?.no_audio !== false,
         variant: session?.target?.variant || null,
       });
       studio.systemPromptDefaults[result.profile] = result.system_prompt;
@@ -927,8 +929,19 @@ async function clearEverything() {
   showToast("Everything cleared", detail);
 }
 
+/** Whether the per-mode localStorage drafts still own this mode's text.
+
+    The session owns the brief and the compiled prompt for every writer target
+    now, and it persists them server-side. Leaving the old drafts running as
+    well gave the same two fields two sources of truth, and the one that had
+    nothing to do with your session won the race on reload. Music 3 is untouched:
+    it has no session document. */
+function draftsOwn(mode) {
+  return isPersistedDraftMode(mode) && (!studio?.stage || mode === "Music3");
+}
+
 function saveCurrentModeDraft() {
-  if (!studio || !isPersistedDraftMode(studio.mode)) return;
+  if (!studio || !draftsOwn(studio.mode)) return;
   studio.modeDrafts[studio.mode] = currentDraftFields();
   saveModeDrafts(localStorage, studio.modeDrafts);
 }
@@ -961,6 +974,13 @@ function updateMusicLyricsCount() {
 
 function restoreModeDraft(mode) {
   if (!studio) return;
+  if (!draftsOwn(mode) && isPersistedDraftMode(mode)) {
+    // The session restores these; re-running the draft here would overwrite it.
+    updateBriefLayout();
+    renderPromptHighlights();
+    syncModifiedState();
+    return;
+  }
   const draft = studio.modeDrafts[mode] || defaultModeDraft(mode);
   const output = studio.root.querySelector("[data-output]");
   currentBriefTextarea().value = draft.brief;
@@ -991,6 +1011,12 @@ function syncWorkspace() {
   // The mode tabs are superseded by the delivery bar: the model is chosen on the
   // right, and H3's own mode is inferred from the attached media.
   studio.root.querySelector("[data-video-modes]").hidden = music || Boolean(studio.stage);
+  // Three columns -- references, authoring, delivery -- only while the writer
+  // stage owns the workspace. Music 3 and Sequence were built around two panes.
+  const threeColumn = Boolean(studio.stage) && !music && !studio.sequence?.active;
+  studio.root.classList.toggle("is-three-column", threeColumn);
+  const authorPanel = studio.root.querySelector("[data-author-panel]");
+  if (authorPanel) authorPanel.hidden = !threeColumn;
   const footerGenerate = studio.root.querySelector("[data-generate]");
   if (footerGenerate) footerGenerate.hidden = Boolean(studio.stage) && !music;
   studio.root.querySelector("[data-video-inputs]").hidden = music;
@@ -3082,14 +3108,14 @@ function createStudio() {
           <p class="h3ps-section-hint" data-h3ps-mode-hint></p>
           <div class="h3ps-media" data-h3ps-media></div>
 
-          <div class="h3ps-control-grid">
-            <label class="h3ps-field h3ps-duration-field"><span>Duration <b data-duration-label>10 seconds</b></span><div><input type="range" min="1" max="20" step="1" value="10" style="--h3ps-range:47.37%" data-duration-slider><i></i></div></label>
+          <div class="h3ps-control-grid" data-delivery-controls>
+            <label class="h3ps-field h3ps-duration-field" data-duration-field><span>Duration <b data-duration-label>10 seconds</b></span><div><input type="range" min="1" max="20" step="1" value="10" style="--h3ps-range:47.37%" data-duration-slider><i></i></div></label>
             ${aspectRatioMarkup(icon)}
           </div>
 
           <label class="h3ps-brief">
             <span><strong>Creative brief</strong><small>Describe what should happen in the video</small></span>
-            <textarea spellcheck="true" maxlength="8000" data-video-brief>Use identity and wardrobe from Picture 1 and the slow lateral camera movement from Video 1. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.</textarea>
+            <textarea spellcheck="true" maxlength="8000" placeholder="e.g. At blue hour a bicycle courier arrives at a rooftop greenhouse, sets down a glowing parcel and watches the city lights come on." data-video-brief></textarea>
             <small class="h3ps-char-count">0 / 8,000</small>
           </label>
           </div>
@@ -3152,9 +3178,9 @@ function createStudio() {
           <div class="h3ps-output-mobile-toolbar" aria-hidden="true"><span data-output-mobile-label>Generated prompt</span></div>
           <div class="h3ps-editor-wrap">
             <div class="h3ps-editor-highlight" data-prompt-highlights aria-hidden="true"></div>
-            <textarea class="h3ps-editor" aria-label="Generated prompt" spellcheck="false" data-output>${SAMPLE_PROMPT}</textarea>
+            <textarea class="h3ps-editor" aria-label="Generated prompt" spellcheck="false" placeholder="The compiled prompt for the model you pick appears here." data-output></textarea>
             <div class="h3ps-reference-peek" data-reference-peek hidden></div>
-            <div class="h3ps-editor-meta"><span>${promptLengthMeta(SAMPLE_PROMPT)}</span></div>
+            <div class="h3ps-editor-meta"><span>${promptLengthMeta("")}</span></div>
           </div>
           <div class="h3ps-refine" data-refine-panel hidden>
             <div class="h3ps-refine-heading">
@@ -3202,7 +3228,7 @@ function createStudio() {
     <div class="h3ps-toast" role="status" aria-live="polite" aria-atomic="true" data-h3ps-toast><span class="h3ps-toast-icon">${icon("info", 17)}</span><span><strong data-toast-title>Notice</strong><span data-toast-message></span><button type="button" class="h3ps-toast-action" data-toast-action hidden></button><details data-toast-details hidden><summary>Technical details</summary><pre></pre></details></span></div>`;
   document.body.appendChild(root);
 
-  studio = { root, ...createStudioState({ sessionId: createSessionId(), storage: localStorage }) };
+  studio = { root, ...createStudioState({ sessionId: loadSessionId(localStorage, createSessionId), storage: localStorage }) };
   root.querySelector("[data-comfy-memory-action]").hidden = !HOST_CAPABILITIES.comfyMemory;
   if (!HOST_CAPABILITIES.windowed) {
     studio.fullscreen = true;
@@ -3782,6 +3808,24 @@ function createStudio() {
       // first time it was opened.
       studio.systemPromptDefaults = {};
       if (!root.querySelector("[data-settings-view]").hidden) syncSystemPromptEditors();
+    },
+    // The session is authoritative for the controls it stores, so a refresh puts
+    // the duration, the ratio and the flags back exactly as they were left.
+    applyInputs: (inputs) => {
+      if (!inputs) return;
+      if (Number.isFinite(inputs.duration_seconds)) {
+        studio.durationSeconds = inputs.duration_seconds;
+        const slider = root.querySelector("[data-duration-slider]");
+        slider.value = String(studio.durationSeconds);
+        slider.style.setProperty("--h3ps-range", `${(studio.durationSeconds - 1) / 19 * 100}%`);
+        root.querySelector("[data-duration-label]").textContent = `${studio.durationSeconds} seconds`;
+      }
+      if (inputs.aspect_ratio && inputs.aspect_ratio !== studio.aspectRatio) {
+        studio.aspectRatio = inputs.aspect_ratio;
+        const choice = root.querySelector('[data-choice-toggle="aspect"]')?.closest(".h3ps-choice");
+        choice?.querySelector(`[data-aspect="${inputs.aspect_ratio}"]`)?.click();
+      }
+      saveUserPreferences(localStorage, studio);
     },
     onSessionChanged: (session) => {
       // Restore the saved brief only into an empty box. Writing it back over a

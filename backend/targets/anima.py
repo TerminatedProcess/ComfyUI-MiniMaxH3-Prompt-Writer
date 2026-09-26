@@ -86,7 +86,15 @@ MIN_TAGS = 6
 RECOMMENDED_NEGATIVES = ("worst quality", "low quality")
 
 
-def system_prompt(mode: str, *, nsfw: bool = True, story: bool = True, variant: str | None = None) -> str:
+def system_prompt(
+    mode: str,
+    *,
+    nsfw: bool = True,
+    story: bool = True,
+    variant: str | None = None,
+    no_audio: bool = False,
+) -> str:
+    del no_audio  # a still has no soundtrack to suppress
     resolved = variant if variant in VARIANTS else "turbo"
     parts = [
         BASE_CONTRACT,

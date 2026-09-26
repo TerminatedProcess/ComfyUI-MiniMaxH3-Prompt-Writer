@@ -26,6 +26,7 @@ FIELDS = frozenset({
     "lyrics",
     "nsfw",
     "story",
+    "no_audio",
     "variant",
     "negative_prompt",
 })

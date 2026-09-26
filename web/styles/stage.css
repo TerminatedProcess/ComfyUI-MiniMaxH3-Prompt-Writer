@@ -1,5 +1,23 @@
 /* The two-pane writer stage: flags, conversation, generic prompt, delivery bar */
 
+/* ---- the three columns: references | authoring | delivery --------------- */
+/* Only while the writer stage owns the workspace. Music 3 and the Sequence
+   workspace were designed around two panes and keep them. */
+.h3ps-root.is-three-column .h3ps-workspace { grid-template-columns: minmax(0, 24%) minmax(0, 33%) minmax(0, 43%); }
+.h3ps-author-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: calc(12px * var(--h3ps-interface-scale)); padding: calc(17px * var(--h3ps-interface-scale)) calc(18px * var(--h3ps-interface-scale)); border-right: 1px solid var(--h3ps-border); background: var(--h3ps-surface); overflow: auto; }
+.h3ps-author-panel[hidden] { display: none; }
+.h3ps-root:not(.is-three-column) .h3ps-author-panel { display: none; }
+.h3ps-author-panel .h3ps-brief { margin: 0; }
+/* The references column is narrow now: let its heading and filters wrap instead
+   of clipping "Audio" off the end of the row. */
+.h3ps-root.is-three-column .h3ps-input-panel .h3ps-section-heading { flex-wrap: wrap; gap: calc(6px * var(--h3ps-interface-scale)); }
+.h3ps-root.is-three-column .h3ps-input-panel .h3ps-section-heading strong { font-size: var(--h3ps-font-subheading); }
+.h3ps-root.is-three-column .h3ps-media-filters { flex-wrap: wrap; }
+.h3ps-root.is-three-column .h3ps-media-filters button { flex: 1 1 auto; }
+.h3ps-author-panel .h3ps-stage-left { flex: 1; min-height: 0; margin-top: 0; }
+.h3ps-author-panel .h3ps-stage-chat { flex: 1; }
+.h3ps-author-panel .h3ps-stage-log { max-height: none; }
+
 /* ---- left: flags, build, conversation ---------------------------------- */
 .h3ps-stage-left { display: flex; flex-direction: column; gap: calc(12px * var(--h3ps-interface-scale)); margin-top: calc(14px * var(--h3ps-interface-scale)); }
 .h3ps-stage-flags { display: flex; flex-wrap: wrap; gap: calc(16px * var(--h3ps-interface-scale)); padding: calc(10px * var(--h3ps-interface-scale)) calc(12px * var(--h3ps-interface-scale)); border: 1px solid var(--h3ps-border); border-radius: 9px; background: var(--h3ps-surface-2); }
@@ -76,6 +94,9 @@
 .h3ps-delivery-mode { color: var(--h3ps-muted); font-size: var(--h3ps-font-control); }
 .h3ps-delivery-mode[data-stale="true"] { color: var(--h3ps-warning); }
 .h3ps-delivery-bar .h3ps-primary-button { margin-left: auto; }
+.h3ps-delivery-controls-slot .h3ps-control-grid { display: flex; flex-wrap: wrap; gap: calc(10px * var(--h3ps-interface-scale)); margin: 0; }
+.h3ps-delivery-controls-slot .h3ps-field { min-width: calc(140px * var(--h3ps-interface-scale)); margin: 0; }
+.h3ps-delivery-controls-slot .h3ps-field[hidden] { display: none; }
 
 /* ---- negative prompt and goal verdicts under the output ---------------- */
 .h3ps-negative-output { margin-top: calc(10px * var(--h3ps-interface-scale)); border: 1px solid var(--h3ps-border); border-radius: 9px; background: var(--h3ps-surface-2); }

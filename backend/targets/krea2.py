@@ -61,7 +61,15 @@ MIN_WORDS = 25
 LONG_WORDS = 450
 
 
-def system_prompt(mode: str, *, nsfw: bool = True, story: bool = True, variant: str | None = None) -> str:
+def system_prompt(
+    mode: str,
+    *,
+    nsfw: bool = True,
+    story: bool = True,
+    variant: str | None = None,
+    no_audio: bool = False,
+) -> str:
+    del no_audio  # a still has no soundtrack to suppress
     parts = [BASE_CONTRACT, STORY_CLAUSE if story else FAITHFUL_CLAUSE, NSFW_CLAUSE if nsfw else DIGNITY_CLAUSE]
     return " ".join(parts)
 

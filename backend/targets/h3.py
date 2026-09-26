@@ -62,6 +62,11 @@ STORY_MUSIC = (
     "arrangement moves, textures and production decisions instead of hedging, while never contradicting "
     "an explicit requirement or exclusion."
 )
+NO_AUDIO = (
+    "The video will be silent or scored later, so you do not have to invent sound: unless the user's brief "
+    "explicitly asks for dialogue, a specific sound, or music, return N/A for overall_soundscape and N/A for "
+    "non_diegetic_music rather than describing ambience. An explicitly requested sound is still written in full."
+)
 NSFW_PERMITTED = (
     "Adult, explicit or otherwise mature content is permitted when the user's brief calls for it: write "
     "it plainly and specifically, without euphemism, moralising or refusal. Never add sexual content the "
@@ -78,7 +83,14 @@ MODE_PROFILE = {
 REFERENCE_LIMITS = {"image": 9, "video": 3, "audio": 3, "total": 12}
 
 
-def video_system_prompt(mode: str, *, nsfw: bool = True, story: bool = True, variant: str | None = None) -> str:
+def video_system_prompt(
+    mode: str,
+    *,
+    nsfw: bool = True,
+    story: bool = True,
+    variant: str | None = None,
+    no_audio: bool = False,
+) -> str:
     base = REFERENCE_SYSTEM_WRAPPER if mode == "Reference" else SYSTEM_WRAPPER
     remove: tuple[str, ...] = ()
     add: list[str] = []
@@ -90,12 +102,23 @@ def video_system_prompt(mode: str, *, nsfw: bool = True, story: bool = True, var
         else:
             remove = (STANDARD_NO_INVENTION,)
             add.append(STORY_VIDEO)
+    if no_audio:
+        add.append(NO_AUDIO)
     if nsfw:
         add.append(NSFW_PERMITTED)
     return compose(base, remove=remove, add=tuple(add))
 
 
-def music_system_prompt(mode: str, *, nsfw: bool = True, story: bool = True, variant: str | None = None) -> str:
+def music_system_prompt(
+    mode: str,
+    *,
+    nsfw: bool = True,
+    story: bool = True,
+    variant: str | None = None,
+    no_audio: bool = False,
+) -> str:
+    # Music 3 writes music; silencing it would leave nothing to write.
+    del no_audio
     if mode == "Music3Lyrics":
         return compose(MUSIC3_LYRICS_SYSTEM_WRAPPER, add=(NSFW_PERMITTED,) if nsfw else ())
     remove = (MUSIC3_NO_INVENTION,) if story else ()
@@ -244,7 +267,7 @@ H3 = Target(
     workspace="video",
     media_kind="video",
     modes=_video_modes(),
-    fields=frozenset({"duration_seconds", "aspect_ratio", "nsfw", "story"}),
+    fields=frozenset({"duration_seconds", "aspect_ratio", "nsfw", "story", "no_audio"}),
     output_shape="sections",
     brief_limit=8000,
     output_tokens="standard",

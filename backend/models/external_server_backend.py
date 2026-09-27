@@ -383,6 +383,20 @@ class ExternalServerBackend:
             raise ModelError("EXTERNAL_MODEL_AMBIGUOUS", "Enter the exact Model ID; the server lists more than one model.")
         matches = [item for item in entries if isinstance(item, dict) and (not requested_model or item.get("id") == requested_model)]
         selected = matches[0] if len(matches) == 1 else None
+        superseded = ""
+        if selected is None and not router and len(entries) == 1 and isinstance(entries[0], dict):
+            # A plain llama-server holds exactly one model and ignores the model id on
+            # every request anyway, so refusing here is stricter than the server itself
+            # -- it can only ever produce a false failure. It did: connecting writes the
+            # resolved id back into the Model ID box, so swapping the server's model
+            # leaves a stale name the user cannot clear (the probe refills it), and the
+            # next generate dies with EXTERNAL_MODEL_NOT_FOUND.
+            #
+            # A router is different: it lists several models and can load them on
+            # demand, so there the requested name is a real choice and a mismatch stays
+            # an error.
+            selected = entries[0]
+            superseded = requested_model
         if selected is None:
             raise ModelError(
                 "EXTERNAL_MODEL_NOT_FOUND",
@@ -425,6 +439,8 @@ class ExternalServerBackend:
             "source_label": f"External llama.cpp · {endpoint}",
             "lifecycle_supported": router,
         }
+        if superseded:
+            model["superseded_model"] = superseded
         self.router.register(model)
         return model
 

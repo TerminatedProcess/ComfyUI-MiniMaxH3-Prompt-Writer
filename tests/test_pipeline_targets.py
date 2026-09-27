@@ -29,7 +29,7 @@ GOOD_TAGS = (
 )
 
 
-def request(mode, *, doc=None, goal_list=(), variant=None, brief="a portrait"):
+def request(mode, *, doc=None, goal_list=(), variant=None, brief="a portrait", repair_attempts=1):
     return {
         "messages": [
             {"role": "system", "content": "system contract"},
@@ -45,6 +45,9 @@ def request(mode, *, doc=None, goal_list=(), variant=None, brief="a portrait"):
             "variant": variant,
             "nsfw": True,
             "story": True,
+            # One pass unless a test is about the loop itself, so a scripted
+            # answer list means what it says.
+            "repair_attempts": repair_attempts,
         },
     }
 
@@ -232,6 +235,81 @@ class LockAndGoalPipelineTests(unittest.TestCase):
         self.assertEqual(result["prompt"], GOOD_PROSE)
         self.assertIn("still failed", result["format_repair_failure"])
         self.assertEqual(result["goals"][0]["verdict"], goals.VERDICT_UNMET)
+
+    def test_an_image_target_is_not_audited_for_sound(self):
+        """Measured: a Krea 2 compile was repaired for "Soundscape must be: Silent".
+
+        A still cannot carry a sound fact, so the repair could never fix it --
+        every attempt was spent and the user was told the prompt had dropped
+        something it could never have held.
+        """
+        doc = generic.set_field(generic.new_doc(), "soundscape", "Silent", generic.ORIGIN_USER)
+        doc = generic.set_field(doc, "subject", "a woman on a bridge", generic.ORIGIN_USER)
+        backend = _CharacterizedBackend([response(GOOD_PROSE + " A woman on a bridge.", prompt_tokens=10, completion_tokens=40)])
+        result = run(backend, request("Krea2", doc=doc))
+        self.assertFalse(result["format_repair_attempted"], "nothing to repair: the fact was never askable")
+        self.assertNotIn("soundscape", result["prompt_audit"].get("lock_violations", []))
+
+    def test_a_video_target_is_still_audited_for_sound(self):
+        """Scoped to what the shape can hold -- H3 carries audio, so it answers for it."""
+        from backend.targets import base
+        for field in ("soundscape", "dialogue", "music"):
+            self.assertTrue(base._auditable(field, {"input": {"mode": "T2VA"}}), field)
+            self.assertFalse(base._auditable(field, {"input": {"mode": "Krea2"}}), field)
+        # Everything else is audited on every target, as before.
+        for field in ("subject", "wardrobe", "pose", "staging", "wardrobe#2"):
+            self.assertTrue(base._auditable(field, {"input": {"mode": "Krea2"}}), field)
+
+    def test_the_repair_loop_keeps_trying_until_the_audit_passes(self):
+        """The user sets how many corrections to spend before being asked."""
+        ledger = [goals.new_goal("do not make it feel like a commercial")]
+        unmet = json.dumps({"verdicts": [{"id": ledger[0]["id"], "met": False, "reason": "reads like an advert"}]})
+        met = json.dumps({"verdicts": [{"id": ledger[0]["id"], "met": True, "reason": "plain enough"}]})
+        second_try = GOOD_PROSE + " Quieter now."
+        backend = _CharacterizedBackend([
+            response(GOOD_PROSE, prompt_tokens=10, completion_tokens=40),
+            response(unmet, prompt_tokens=8, completion_tokens=12),
+            response(GOOD_PROSE + " Glossier.", prompt_tokens=12, completion_tokens=44),   # repair 1
+            response(unmet, prompt_tokens=8, completion_tokens=10),
+            response(second_try, prompt_tokens=12, completion_tokens=44),                  # repair 2
+            response(met, prompt_tokens=8, completion_tokens=10),
+        ])
+        result = run(backend, request("Krea2", goal_list=ledger, repair_attempts=3))
+        self.assertTrue(result["format_repair_applied"])
+        self.assertEqual(result["format_repair_attempts"], 2, "it stopped as soon as the audit passed")
+        self.assertEqual(result["prompt"], second_try)
+        self.assertIsNone(result["format_repair_failure"])
+
+    def test_the_loop_stops_at_the_user_s_budget_and_hands_back_the_original(self):
+        ledger = [goals.new_goal("do not make it feel like a commercial")]
+        unmet = json.dumps({"verdicts": [{"id": ledger[0]["id"], "met": False, "reason": "reads like an advert"}]})
+        backend = _CharacterizedBackend([
+            response(GOOD_PROSE, prompt_tokens=10, completion_tokens=40),
+            response(unmet, prompt_tokens=8, completion_tokens=12),
+            response(GOOD_PROSE + " One.", prompt_tokens=12, completion_tokens=44),
+            response(unmet, prompt_tokens=8, completion_tokens=10),
+            response(GOOD_PROSE + " Two.", prompt_tokens=12, completion_tokens=44),
+            response(unmet, prompt_tokens=8, completion_tokens=10),
+        ])
+        result = run(backend, request("Krea2", goal_list=ledger, repair_attempts=2))
+        self.assertEqual(result["format_repair_attempts"], 2)
+        self.assertEqual(result["format_repair_allowed"], 2)
+        self.assertFalse(result["format_repair_applied"])
+        self.assertEqual(result["prompt"], GOOD_PROSE, "the model's own writing, not a spliced draft that failed")
+        self.assertIn("still failed", result["format_repair_failure"])
+
+    def test_zero_attempts_never_calls_the_model_again(self):
+        """Some users would rather see the first draft and fix it themselves."""
+        ledger = [goals.new_goal("do not make it feel like a commercial")]
+        unmet = json.dumps({"verdicts": [{"id": ledger[0]["id"], "met": False, "reason": "reads like an advert"}]})
+        backend = _CharacterizedBackend([
+            response(GOOD_PROSE, prompt_tokens=10, completion_tokens=40),
+            response(unmet, prompt_tokens=8, completion_tokens=12),
+        ])
+        result = run(backend, request("Krea2", goal_list=ledger, repair_attempts=0))
+        self.assertFalse(result["format_repair_attempted"])
+        self.assertEqual(result["format_repair_attempts"], 0)
+        self.assertEqual(result["prompt"], GOOD_PROSE)
 
     def test_an_unverifiable_judged_goal_stays_pending_rather_than_passing(self):
         ledger = [goals.new_goal("do not make it feel like a commercial")]

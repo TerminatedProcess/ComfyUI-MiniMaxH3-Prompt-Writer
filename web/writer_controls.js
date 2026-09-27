@@ -51,6 +51,13 @@ export function setSplitMenuOpen(control, open) {
 export function copyButtonMarkup(icon, attributes, label = "", iconOnly = false) {
   return `<button class="${iconOnly ? "h3ps-icon-button" : "h3ps-secondary-button"}" type="button" ${attributes}>${icon("copy", 15)}${label ? ` ${label}` : ""}</button>`;
 }
+/** Copy whatever a field holds. Every field carrying prompt text gets one, not
+ *  only the generated prompt: a brief or a system prompt is just as pasteable.
+ *  `selector` is resolved against the studio root when the button is pressed. */
+export function fieldCopyButtonMarkup(icon, selector, title) {
+  return `<button class="h3ps-icon-button h3ps-field-copy" type="button" data-copy-field="${selector}"
+    data-copy-title="${title}" title="${title}" aria-label="${title}">${icon("copy", 14)}</button>`;
+}
 
 // Option labels and actions are trusted constants supplied by Writer views.
 export function formatChoiceMarkup(label, options, selected) {

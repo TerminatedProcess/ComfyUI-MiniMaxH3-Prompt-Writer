@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from backend import conversation, generic, goals
+from backend import conversation, heat, generic, goals
 
 
 def build_answer(observed=None, scene=None, from_brief=None):
@@ -405,9 +405,40 @@ class InstructionTests(unittest.TestCase):
         self.assertIn("Story builder is ON", conversation.build_instructions(nsfw=False, story=True))
         self.assertIn("Story builder is OFF", conversation.build_instructions(nsfw=False, story=False))
 
-    def test_naughty_permission_is_only_present_when_set(self):
-        self.assertIn("Adult or explicit content is permitted", conversation.build_instructions(nsfw=True, story=True))
-        self.assertNotIn("Adult or explicit", conversation.build_instructions(nsfw=False, story=True))
+    def test_naughty_develops_the_scene_where_invention_is_licensed(self):
+        """Naughty does different work at each stage, by design.
+
+        Expanding a brief is where the user asks for something, so the flag
+        develops the material there. At compile time it stays a permission: the
+        prompt may not invent what the brief never asked for.
+        """
+        self.assertIn("Develop the sensual", conversation.expand_instructions(nsfw=True, story=True))
+        self.assertIn("Develop the sensual", conversation.expand_instructions(nsfw=True, story=False))
+        self.assertIn("Develop the sensual", conversation.build_instructions(nsfw=True, story=True))
+
+    def test_the_dial_outranks_faithful_mode_for_what_it_names(self):
+        """The reported bug: with Story builder off the dial did nothing at all.
+
+        "Do not invent new content" and "develop the sensual dimension" are
+        flatly contradictory, and the model obeyed whichever it read first -- so
+        every level produced the same faithful tightening.
+        """
+        for build in (conversation.expand_instructions, conversation.build_instructions):
+            faithful = build(story=False, heat=heat.GRAPHIC)
+            self.assertIn("pornographic prose", faithful)
+            self.assertIn("outranks", faithful, "the contradiction is resolved in the dial's favour")
+            self.assertIn("invent nothing else", faithful, "and only for what the dial names")
+            # Nothing to reconcile when the level asks for nothing.
+            self.assertNotIn("outranks", build(story=False, heat=heat.CLEAN))
+            self.assertNotIn("outranks", build(story=True, heat=heat.GRAPHIC))
+
+    def test_naughty_is_absent_entirely_when_unset(self):
+        for text in (
+            conversation.build_instructions(nsfw=False, story=True),
+            conversation.expand_instructions(nsfw=False, story=True),
+        ):
+            self.assertNotIn("Adult or explicit", text)
+            self.assertNotIn("Develop the sensual", text)
 
     def test_turn_instructions_distinguish_a_goal_from_a_patch(self):
         text = conversation.turn_instructions(nsfw=False, story=False)

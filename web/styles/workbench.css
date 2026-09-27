@@ -62,10 +62,20 @@
 .h3ps-choice-menu button em { margin-left: auto; color: var(--h3ps-muted); font-size: var(--h3ps-font-caption); font-style: normal; }
 .h3ps-aspect-menu { display: grid; grid-template-columns: 1fr 1fr; right: auto; width: 270px; }
 .h3ps-brief { position: relative; display: flex; flex-direction: column; margin-top: 13px; }
-.h3ps-brief > span { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+.h3ps-brief > span { display: flex; align-items: baseline; justify-content: space-between; gap: calc(9px * var(--h3ps-interface-scale)); margin-bottom: 6px; }
 .h3ps-brief > span small { color: var(--h3ps-muted); font-size: var(--h3ps-font-label); }
-.h3ps-brief textarea { width: 100%; min-height: 105px; max-height: 190px; resize: none; overflow-y: auto; padding: calc(9px * var(--h3ps-interface-scale)) calc(12px * var(--h3ps-interface-scale)) calc(23px * var(--h3ps-interface-scale)); border: 1px solid var(--h3ps-border); border-radius: 8px; outline: none; background: var(--h3ps-field); color: var(--h3ps-text-input); font-size: var(--h3ps-font-body-sm); line-height: 1.45; scrollbar-width: thin; scrollbar-color: var(--h3ps-scrollbar) transparent; }
-.h3ps-brief textarea::-webkit-scrollbar { width: 5px; }.h3ps-brief textarea::-webkit-scrollbar-thumb { border-radius: 6px; background: var(--h3ps-scrollbar); }
+/* The header's free space belongs to the Copy button, so the label and its hint
+   stay together on the left instead of being spread apart by space-between. */
+.h3ps-brief > span .h3ps-field-copy { width: calc(24px * var(--h3ps-interface-scale)); height: calc(24px * var(--h3ps-interface-scale)); margin: calc(-4px * var(--h3ps-interface-scale)) 0; margin-left: auto; align-self: center; }
+/* An expanded brief runs to several hundred words, and a 190px box with a 5px
+   ghost scrollbar made it unreadable: taller by default, draggable when you
+   want more, and a scrollbar you can actually see and grab. */
+.h3ps-brief textarea { width: 100%; min-height: 105px; max-height: min(42vh, 420px); resize: vertical; overflow-y: auto; padding: calc(9px * var(--h3ps-interface-scale)) calc(12px * var(--h3ps-interface-scale)) calc(23px * var(--h3ps-interface-scale)); border: 1px solid var(--h3ps-border); border-radius: 8px; outline: none; background: var(--h3ps-field); color: var(--h3ps-text-input); font-size: var(--h3ps-font-body-sm); line-height: 1.45; scrollbar-width: thin; scrollbar-color: var(--h3ps-scrollbar) transparent; }
+.h3ps-brief textarea { scrollbar-color: var(--h3ps-scrollbar) var(--h3ps-surface-3); }
+.h3ps-brief textarea::-webkit-scrollbar { width: 11px; }
+.h3ps-brief textarea::-webkit-scrollbar-track { border-radius: 6px; background: var(--h3ps-surface-3); }
+.h3ps-brief textarea::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 6px; background: var(--h3ps-scrollbar); background-clip: content-box; }
+.h3ps-brief textarea::-webkit-scrollbar-thumb:hover { background: var(--h3ps-muted); background-clip: content-box; }
 .h3ps-brief textarea:focus { border-color: rgba(255,115,86,.62); box-shadow: 0 0 0 2px rgba(255,115,86,.08); }
 .h3ps-char-count { position: absolute; right: 10px; bottom: 8px; color: var(--h3ps-dim); font-size: var(--h3ps-font-caption); }
 .h3ps-active-model { display:grid; grid-template-columns:31px minmax(0,1fr) auto 16px; align-items:center; gap:calc(9px * var(--h3ps-interface-scale)); width:100%; min-height:calc(46px * var(--h3ps-interface-scale)); margin-top:12px; padding:calc(5px * var(--h3ps-interface-scale)) calc(9px * var(--h3ps-interface-scale)); border:1px solid var(--h3ps-border-soft); border-radius:8px; background:var(--h3ps-card-surface); color:var(--h3ps-text); text-align:left; cursor:pointer; }
@@ -408,6 +418,10 @@
 
 .h3ps-output-primary-actions { gap: 7px; }
 .h3ps-output-actions .h3ps-secondary-button { gap: 7px; height: 34px; padding-inline: 12px; font-size: 11px; }
+/* The icon Copy still has to line up with Refine beside it. */
+/* Copy lives in the prompt box's own top-right corner, the way the brief's
+   does -- the same gesture wherever a prompt field is. */
+.h3ps-editor-copy { position: absolute; z-index: 3; top: 7px; right: 9px; width: 26px; height: 26px; background: var(--h3ps-editor-surface); }
 .h3ps-reference-insert-toggle { width: 34px; height: 34px; }
 .h3ps-reference-insert-toggle::before { width: 16px; height: 16px; }
 .h3ps-root .h3ps-output-actions svg[style*="--h3ps-icon-size"] { width: var(--h3ps-icon-size); height: var(--h3ps-icon-size); }

@@ -26,12 +26,14 @@
 .h3ps-asset-copy { position: absolute; left: 9px; right: 23px; bottom: 7px; display: flex; flex-direction: column; min-width: 0; }
 .h3ps-asset-copy strong { overflow: hidden; font-size: var(--h3ps-font-control-sm); font-weight: 560; white-space: nowrap; text-overflow: ellipsis; }
 .h3ps-asset-copy small { overflow: hidden; margin-top: 1px; color: var(--h3ps-muted); font-size: var(--h3ps-font-caption); white-space: nowrap; text-overflow: ellipsis; }
-.h3ps-replace-asset, .h3ps-remove-asset { position:absolute; z-index:5; top:6px; display:grid; place-items:center; width:22px; height:22px; padding:0; border:1px solid rgba(255,255,255,.14); border-radius:6px; background:rgba(8,9,11,.8); color:#d8dbe0; cursor:pointer; opacity:0; pointer-events:none; transform:scale(.92); transition:opacity 120ms ease,transform 120ms ease,background 120ms ease,color 120ms ease; }
-.h3ps-root .h3ps-replace-asset svg, .h3ps-root .h3ps-remove-asset svg { width:12px; height:12px; }
+.h3ps-describe-asset, .h3ps-replace-asset, .h3ps-remove-asset { position:absolute; z-index:5; top:6px; display:grid; place-items:center; width:22px; height:22px; padding:0; border:1px solid rgba(255,255,255,.14); border-radius:6px; background:rgba(8,9,11,.8); color:#d8dbe0; cursor:pointer; opacity:0; pointer-events:none; transform:scale(.92); transition:opacity 120ms ease,transform 120ms ease,background 120ms ease,color 120ms ease; }
+.h3ps-root .h3ps-describe-asset svg, .h3ps-root .h3ps-replace-asset svg, .h3ps-root .h3ps-remove-asset svg { width:12px; height:12px; }
 .h3ps-replace-asset { top:32px; right:6px; }
+.h3ps-describe-asset { top:58px; right:6px; }
 .h3ps-remove-asset { right:6px; }
-.h3ps-asset:hover .h3ps-replace-asset, .h3ps-replace-asset:focus-visible, .h3ps-asset:hover .h3ps-remove-asset, .h3ps-remove-asset:focus-visible { opacity:1; pointer-events:auto; transform:scale(1); }
+.h3ps-asset:hover .h3ps-describe-asset, .h3ps-describe-asset:focus-visible, .h3ps-asset:hover .h3ps-replace-asset, .h3ps-replace-asset:focus-visible, .h3ps-asset:hover .h3ps-remove-asset, .h3ps-remove-asset:focus-visible { opacity:1; pointer-events:auto; transform:scale(1); }
 .h3ps-replace-asset:hover { background:rgba(42,45,52,.94); color:#fff; }
+.h3ps-describe-asset:hover { background:rgba(232,97,60,.92); color:#fff; }.h3ps-describe-asset:disabled { cursor:not-allowed; }
 .h3ps-remove-asset:hover { background:rgba(124,48,40,.92); color:#fff; }.h3ps-remove-asset:disabled { cursor:not-allowed; }
 .h3ps-media.is-reordering .h3ps-asset { transition: opacity 120ms ease, filter 120ms ease, border-color 120ms ease, box-shadow 120ms ease; }
 .h3ps-asset.is-dragging { opacity: .38; filter: saturate(.45); border-style: dashed; border-color: var(--h3ps-border-drag); background: var(--h3ps-chrome-alt); }

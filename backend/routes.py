@@ -31,7 +31,7 @@ from .system_prompts import SystemPromptError, system_prompt_for_mode
 from .version import VERSION
 from .sequence_routes import register_sequence_routes
 from .generic_routes import register_generic_routes
-from . import session_store
+from . import goals as goal_ledger, session_store
 from .targets import TargetError, generation_modes, guide_ids_for_mode, profile_for_mode
 
 
@@ -300,6 +300,17 @@ async def _resolve_model(body: dict[str, Any]) -> dict[str, Any] | None:
             )
         return model
     return find_model(str(body.get("model_id") or ""))
+
+
+def _carry_repair_attempts(body: dict[str, Any], assembled: dict[str, Any]) -> None:
+    """The user's repair-attempt setting, from the request onto the assembly.
+
+    Stamped here rather than inside each assembler: every target builds its own
+    input block, and a setting that only reached some of them would be a silent
+    per-target difference.
+    """
+    if "repair_attempts" in body:
+        assembled.setdefault("input", {})["repair_attempts"] = body.get("repair_attempts")
 
 
 async def _apply_deferred_unload(
@@ -675,6 +686,7 @@ async def assemble(request: web.Request) -> web.Response:
         return _error("INVALID_REQUEST", "Expected a JSON object.", status=400)
     try:
         assembled = assemble_request(body)
+        _carry_repair_attempts(body, assembled)
     except AssemblyError as error:
         return _error(error.code, error.message, status=400, details=error.details)
     except (MediaError, RuntimeError) as error:
@@ -709,6 +721,7 @@ async def generate(request: web.Request) -> web.Response:
         return _error("INVALID_REQUEST", "Seed must be a non-negative integer.", status=400)
     try:
         assembled = assemble_request(body)
+        _carry_repair_attempts(body, assembled)
     except AssemblyError as error:
         return _error(error.code, error.message, status=400, details=error.details)
     except (MediaError, RuntimeError) as error:
@@ -790,7 +803,10 @@ async def generate(request: web.Request) -> web.Response:
                     audit=result.get("prompt_audit") or {},
                 )
                 if result.get("goals"):
-                    state["goals"] = result["goals"]
+                    # The compile's evaluated list carries goals derived from the
+                    # document for this compile only; storing them would grow the
+                    # user's ledger by every relation, every time.
+                    state["goals"] = goal_ledger.without_derived(result["goals"])
                 session_store.save(state)
             except (session_store.SessionStoreError, OSError) as error:
                 # Persistence is a convenience here; never fail a finished
@@ -802,7 +818,7 @@ async def generate(request: web.Request) -> web.Response:
             operation="generate",
             total_seconds=total_seconds,
             peak_vram_mb=peak_vram_mb,
-            metrics={key: result[key] for key in ("input_tokens", "output_tokens", "generation_seconds", "media_processing_seconds", "visual_input_count", "video_frame_count", "video_sheet_count", "estimated_input_tokens", "estimated_visual_tokens", "reserved_output_tokens", "text_token_source", "vision_budget_applied", "thinking_fallback", "thinking_attempt_tokens", "reasoning_tokens", "primary_finish_reason", "format_repair_attempted", "format_repair_applied", "format_repair_reason", "format_repair_failure", "format_repair_method", "format_repair_multimodal", "format_repair_tokens", "tokens_per_second", "cold_start", "model_load_seconds", "context_profile", "context_tokens", "kv_cache", "max_output_tokens", "thinking_budget_reduced", "prompt_audit", "api_provider", "provider_request_count", "usage_source", "provider_request_ids", "provider_cost_usd", "upstream_providers") if key in result},
+            metrics={key: result[key] for key in ("input_tokens", "output_tokens", "generation_seconds", "media_processing_seconds", "visual_input_count", "video_frame_count", "video_sheet_count", "estimated_input_tokens", "estimated_visual_tokens", "reserved_output_tokens", "text_token_source", "vision_budget_applied", "thinking_fallback", "thinking_attempt_tokens", "reasoning_tokens", "primary_finish_reason", "format_repair_attempted", "format_repair_attempts", "format_repair_applied", "format_repair_reason", "format_repair_failure", "format_repair_method", "format_repair_multimodal", "format_repair_tokens", "tokens_per_second", "cold_start", "model_load_seconds", "context_profile", "context_tokens", "kv_cache", "max_output_tokens", "thinking_budget_reduced", "prompt_audit", "api_provider", "provider_request_count", "usage_source", "provider_request_ids", "provider_cost_usd", "upstream_providers") if key in result},
             input_sequence=debug_input_sequence if DEVELOPER_MODE else None,
             output=result["prompt"],
         )
@@ -935,6 +951,7 @@ async def refine(request: web.Request) -> web.Response:
             body,
             _get_generation_cache(body["session_id"], body["mode"]),
         )
+        _carry_repair_attempts(body, assembled)
     except AssemblyError as error:
         return _error(error.code, error.message, status=400, details=error.details)
     except (MediaError, RuntimeError) as error:
@@ -1003,7 +1020,7 @@ async def refine(request: web.Request) -> web.Response:
             operation=operation,
             total_seconds=total_seconds,
             peak_vram_mb=peak_vram_mb,
-            metrics={key: result[key] for key in ("input_tokens", "output_tokens", "generation_seconds", "media_processing_seconds", "visual_input_count", "video_frame_count", "video_sheet_count", "estimated_input_tokens", "estimated_visual_tokens", "reserved_output_tokens", "text_token_source", "vision_budget_applied", "thinking_fallback", "thinking_attempt_tokens", "reasoning_tokens", "primary_finish_reason", "format_repair_attempted", "format_repair_applied", "format_repair_reason", "format_repair_failure", "format_repair_method", "format_repair_multimodal", "format_repair_tokens", "tokens_per_second", "cold_start", "model_load_seconds", "context_profile", "context_tokens", "kv_cache", "max_output_tokens", "thinking_budget_reduced", "prompt_audit", "api_provider", "provider_request_count", "usage_source", "provider_request_ids", "provider_cost_usd", "upstream_providers") if key in result},
+            metrics={key: result[key] for key in ("input_tokens", "output_tokens", "generation_seconds", "media_processing_seconds", "visual_input_count", "video_frame_count", "video_sheet_count", "estimated_input_tokens", "estimated_visual_tokens", "reserved_output_tokens", "text_token_source", "vision_budget_applied", "thinking_fallback", "thinking_attempt_tokens", "reasoning_tokens", "primary_finish_reason", "format_repair_attempted", "format_repair_attempts", "format_repair_applied", "format_repair_reason", "format_repair_failure", "format_repair_method", "format_repair_multimodal", "format_repair_tokens", "tokens_per_second", "cold_start", "model_load_seconds", "context_profile", "context_tokens", "kv_cache", "max_output_tokens", "thinking_budget_reduced", "prompt_audit", "api_provider", "provider_request_count", "usage_source", "provider_request_ids", "provider_cost_usd", "upstream_providers") if key in result},
             input_sequence=debug_input_sequence if DEVELOPER_MODE else None,
             output=result["prompt"],
         )

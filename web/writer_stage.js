@@ -20,6 +20,7 @@ import { inferH3Mode } from "./mode_inference.js";
 import {
   buildGeneric,
   changeGoal,
+  describeAsset,
   editGenericField,
   expandBrief,
   getSession,
@@ -49,6 +50,24 @@ const GOAL_KIND_HINTS = {
   judged: "checked by a verifier pass over the finished prompt",
 };
 const AUTO_PREFIX = "auto:";
+// Mirrors backend/heat.py. The dial replaced a boolean that had to mean four
+// different things at once.
+const HEAT_LABELS = ["Clean", "Allowed", "Sensual", "Explicit", "Graphic"];
+const HEAT_HINTS = [
+  "Nothing sexual, and nothing suggestive.",
+  "Adult content only where you ask for it.",
+  "Draws out the charge in a scene: bodies, contact, wardrobe.",
+  "Names nudity, anatomy and acts plainly.",
+  "Pornographic prose, crude and direct.",
+];
+const DEFAULT_HEAT = 2;
+
+function heatLevel(inputs) {
+  const stored = inputs?.heat;
+  if (Number.isInteger(stored)) return Math.max(0, Math.min(4, stored));
+  // A session that predates the dial carries only the boolean.
+  return inputs?.nsfw === false ? 0 : DEFAULT_HEAT;
+}
 
 export function createWriterStage(host) {
   const { root, icon } = host;
@@ -76,8 +95,9 @@ export function createWriterStage(host) {
     left.className = "h3ps-stage-left";
     left.innerHTML = `
       <div class="h3ps-stage-flags" role="group" aria-label="Writing behaviour">
-        <label class="h3ps-toggle-control" title="Adult or explicit content is permitted when your brief asks for it">
-          <input type="checkbox" data-stage-flag="nsfw"><span></span>Naughty
+        <label class="h3ps-heat" title="How far the writer goes, from clean to graphic. It applies when you expand a brief, when the document is built, and when a prompt is compiled.">
+          <span class="h3ps-heat-head">Naughty <b data-heat-label>Sensual</b></span>
+          <input type="range" min="0" max="4" step="1" value="2" data-heat aria-label="Naughty level">
         </label>
         <label class="h3ps-toggle-control" title="Invent supporting detail the brief leaves open, instead of staying literal">
           <input type="checkbox" data-stage-flag="story"><span></span>Story builder
@@ -129,6 +149,8 @@ export function createWriterStage(host) {
         <header>
           <span><strong>Generic prompt</strong><small data-generic-summary>Not built yet</small></span>
           <span class="h3ps-generic-actions">
+            <button class="h3ps-icon-button h3ps-field-copy" type="button" data-generic-copy
+                    title="Copy the whole document as text" aria-label="Copy the generic prompt">${icon("copy", 14)}</button>
             <button class="h3ps-text-button" type="button" data-generic-toggle aria-expanded="true">Hide</button>
           </span>
         </header>
@@ -162,6 +184,10 @@ export function createWriterStage(host) {
           <select id="h3ps-delivery-variant-select" data-delivery-variant-select></select>
         </span>
         <span class="h3ps-delivery-mode" data-delivery-mode></span>
+        <span class="h3ps-delivery-repairs" title="How many times the writer may correct its own draft before it hands the problem back to you">
+          <label for="h3ps-repair-attempts">Retries</label>
+          <select id="h3ps-repair-attempts" data-repair-attempts></select>
+        </span>
         <button class="h3ps-primary-button" type="button" data-stage-compile>
           ${icon("spark", 15)}<span data-stage-compile-label>Generate prompt</span>
         </button>
@@ -174,7 +200,8 @@ export function createWriterStage(host) {
     negative.hidden = true;
     negative.innerHTML = `
       <header><span><strong>Negative prompt</strong><small data-negative-note></small></span>
-        <button class="h3ps-text-button" type="button" data-negative-copy>Copy</button></header>
+        <button class="h3ps-icon-button h3ps-field-copy" type="button" data-negative-copy
+                title="Copy the negative prompt" aria-label="Copy the negative prompt">${icon("copy", 14)}</button></header>
       <textarea class="h3ps-editor h3ps-negative-editor" rows="2" spellcheck="false" data-negative-value aria-label="Negative prompt"></textarea>`;
     query(".h3ps-editor-wrap").after(negative);
 
@@ -220,6 +247,18 @@ export function createWriterStage(host) {
         <h4>${escape(group.title)}</h4>
         ${group.fields.map(fieldRow).join("")}
       </section>`).join("");
+  }
+
+  /** The document as pasteable text: the fields that have a value, grouped and
+   *  labelled the way the card shows them. */
+  function documentText() {
+    return (session?.groups || []).map((group) => {
+      const lines = group.fields
+        .map((key) => [session.labels[key] || key, session.fields[key]?.value])
+        .filter(([, value]) => value)
+        .map(([label, value]) => `${label}: ${value}`);
+      return lines.length ? `${group.title}\n${lines.join("\n")}` : "";
+    }).filter(Boolean).join("\n\n");
   }
 
   function renderGoals() {
@@ -353,16 +392,20 @@ export function createWriterStage(host) {
     root.querySelectorAll("[data-stage-flag]").forEach((input) => {
       input.checked = session.inputs?.[input.dataset.stageFlag] !== false;
     });
+    const level = heatLevel(session.inputs);
+    const slider = query("[data-heat]");
+    slider.value = String(level);
+    slider.style.setProperty("--h3ps-range", `${level / 4 * 100}%`);
+    query("[data-heat-label]").textContent = HEAT_LABELS[level];
     // Say what the switches will do, before a generation proves it. They edit a
     // system prompt nobody reads, so without this they are invisible until the
     // output lands -- and by then it is too late to have chosen differently.
     const story = session.inputs?.story !== false;
-    const nsfw = session.inputs?.nsfw !== false;
     query("[data-flag-effect]").textContent = [
       story
         ? "Gaps get invented detail you can replace."
         : "Only what you or your references supply; gaps stay unspecified.",
-      nsfw ? "Adult content is allowed where you ask for it." : "Kept non-explicit.",
+      HEAT_HINTS[heatLevel(session.inputs)],
     ].join(" ");
   }
 
@@ -523,10 +566,58 @@ export function createWriterStage(host) {
       const payload = await expandBrief({ ...host.inferencePayload(), session_id: host.sessionId(), brief: before });
       applySession(payload);
       if (box && payload.brief) box.value = payload.brief;
-      previousBrief = payload.previous_brief ?? before;
-      query("[data-brief-undo]").hidden = false;
-      host.notify("Brief expanded", "Read it over and edit anything you disagree with, or undo it.");
+      offerUndo(payload.previous_brief ?? before, "Undo expand");
+      // Naming the level makes the dial's effect checkable: "it did nothing"
+      // and "it did something I did not notice" look identical otherwise.
+      host.notify(
+        `Brief expanded at ${payload.heat_label || HEAT_LABELS[heatLevel(session?.inputs)]}`,
+        "Read it over and edit anything you disagree with, or undo it.",
+      );
     });
+  }
+
+  /** Arm the single brief undo, saying which rewrite it would take back. */
+  function offerUndo(wording, label) {
+    previousBrief = wording;
+    const button = query("[data-brief-undo]");
+    button.textContent = label;
+    button.hidden = false;
+  }
+
+  /** Write the brief from ONE attached image -- the studio's double-click.
+   *
+   *  Appends when the brief already says something, so describing a second
+   *  picture (or double-clicking with notes already typed) adds to the brief
+   *  instead of replacing it. Either way the undo puts the old wording back. */
+  async function describe(assetId) {
+    const asset = (host.assets() || []).find((item) => item.id === assetId);
+    if (!asset) return false;
+    if (asset.type !== "image") {
+      host.notify("Images only", "Only a picture can be described into the brief.");
+      return false;
+    }
+    const box = host.briefElement?.();
+    const before = host.briefValue();
+    let done = false;
+    await withBusy(`Reading ${asset.reference || asset.filename}`, async () => {
+      // The brief box debounces its save, so what is on screen may not be in the
+      // session yet -- and the description would be appended to a stale brief.
+      if (before.trim() !== String(session?.inputs?.brief || "").trim()) {
+        applySession(await saveInputs({ session_id: host.sessionId(), brief: before }));
+      }
+      const payload = await describeAsset({
+        ...host.inferencePayload(), session_id: host.sessionId(), asset_id: assetId,
+      });
+      applySession(payload);
+      if (box && payload.brief) box.value = payload.brief;
+      offerUndo(payload.previous_brief ?? before, "Undo description");
+      done = true;
+      host.notify(
+        before.trim() ? "Added to the brief" : "Brief written from the image",
+        "Read it over and edit anything you disagree with, or undo it.",
+      );
+    });
+    return done;
   }
 
   async function undoExpand() {
@@ -544,14 +635,31 @@ export function createWriterStage(host) {
     if (confirm && !host.confirmReset()) return false;
     let done = false;
     await withBusy(scope === "prompts" ? "Clearing prompts" : "Resetting", async () => {
+      // Emptied before the session lands, so `onSessionChanged` sees an empty box
+      // and has nothing to restore into it.
+      const brief = host.briefElement?.();
+      if (brief) brief.value = "";
       applySession(await resetSession({ session_id: host.sessionId(), scope, clear_media: clearMedia }));
-      if (scope === "all") host.afterReset();
+      if (scope === "all") {
+        host.afterReset();
+        // A full reset means defaults, not just empty text: the fresh session
+        // carries duration, ratio and both flags, and the studio holds its own
+        // copies that would otherwise be written straight back.
+        host.applyInputs?.(session?.inputs);
+        autoTargetId = null;
+        const inferring = targetsForStage().find((target) => target.infers_mode);
+        if (inferring) {
+          autoTargetId = inferring.id;
+          applyAuto();
+        }
+        render();
+      }
       done = true;
       if (!notify) return;
       host.notify(
         scope === "prompts" ? "Prompts cleared" : "Session reset",
         scope === "prompts"
-          ? "The generic prompt and every compiled prompt were cleared. Your media, brief, goals and conversation were kept."
+          ? "The brief, the generic prompt, the goals, the conversation and every compiled prompt were cleared. Your media was kept."
           : "The generic prompt, goals, conversation and compiled prompts were cleared.",
       );
     });
@@ -595,6 +703,17 @@ export function createWriterStage(host) {
     root.querySelectorAll("[data-stage-flag]").forEach((input) => {
       input.addEventListener("change", () => persistInputs({ [input.dataset.stageFlag]: input.checked }));
     });
+    const heat = query("[data-heat]");
+    // Label and fill follow the thumb immediately; the session is told when the
+    // user lets go, so dragging across the range is not five round trips.
+    heat.addEventListener("input", () => {
+      const level = Number(heat.value);
+      heat.style.setProperty("--h3ps-range", `${level / 4 * 100}%`);
+      query("[data-heat-label]").textContent = HEAT_LABELS[level];
+      query("[data-flag-effect]").textContent = query("[data-flag-effect]").textContent
+        .replace(/(?:[^.]*\.)$/, ` ${HEAT_HINTS[level]}`);
+    });
+    heat.addEventListener("change", () => persistInputs({ heat: Number(heat.value) }));
     query("[data-stage-build]").addEventListener("click", build);
     query("[data-brief-expand]")?.addEventListener("click", expand);
     query("[data-brief-undo]")?.addEventListener("click", undoExpand);
@@ -603,6 +722,11 @@ export function createWriterStage(host) {
     query("[data-stage-compile]").addEventListener("click", () => host.compile());
     query("[data-stage-message]").addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); send(); }
+    });
+    query("[data-generic-copy]").addEventListener("click", () => {
+      const text = documentText();
+      if (!text) { host.notify("Generic prompt", "Nothing has been built yet."); return; }
+      host.copy(text, "Generic prompt copied");
     });
     query("[data-generic-toggle]").addEventListener("click", (event) => {
       const body = query("[data-generic-body]");
@@ -663,6 +787,14 @@ export function createWriterStage(host) {
       render();
       persistInputs({ mode: host.currentMode() });
     });
+    // Optional on the host: a studio that does not offer the setting still gets
+    // a working bar, with the same default the backend would have used.
+    const repairs = query("[data-repair-attempts]");
+    const maxRepairs = host.maxRepairAttempts?.() ?? 5;
+    repairs.innerHTML = Array.from({ length: maxRepairs + 1 }, (_value, count) =>
+      `<option value="${count}">${count === 0 ? "None" : count}</option>`).join("");
+    repairs.value = String(host.repairAttempts?.() ?? 3);
+    repairs.addEventListener("change", (event) => host.setRepairAttempts?.(Number(event.target.value)));
     query("[data-delivery-variant-select]").addEventListener("change", (event) => {
       persistInputs({ mode: host.currentMode(), variant: event.target.value });
     });
@@ -708,6 +840,9 @@ export function createWriterStage(host) {
     refresh: async () => applySession(await getSession(host.sessionId())),
     /** Clear scope: "prompts" keeps what you supplied, "all" is Reset. */
     clear: (options) => reset(options),
+    /** Write the brief from one attached image (double-click on its card). */
+    describe,
+    busy: () => busy,
     /** Called when media is added or removed, so an automatic target follows it. */
     mediaChanged() {
       applyAuto();

@@ -139,6 +139,12 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
   }
 }
 
+// Mirrors backend/context.py. Three clears the ordinary paraphrase failures
+// without the studio grinding on without you.
+export const DEFAULT_REPAIR_ATTEMPTS = 3;
+export const MAX_REPAIR_ATTEMPTS = 5;
+
+
 export function saveUserPreferences(storage, state) {
   const safe = {
     version: 1,
@@ -153,6 +159,8 @@ export function saveUserPreferences(storage, state) {
     direct_generation_budget: GENERATION_BUDGETS.includes(state.directGenerationBudget) ? state.directGenerationBudget : "auto",
     direct_generation_budget_tokens: Number.isInteger(state.directGenerationBudgetTokens) && state.directGenerationBudgetTokens > 0 ? state.directGenerationBudgetTokens : null,
     direct_reasoning_effort: typeof state.directReasoningEffort === "string" && state.directReasoningEffort ? state.directReasoningEffort : "auto",
+    // How many corrections the writer may try before asking you. 0 = never.
+    repair_attempts: Number.isInteger(state.repairAttempts) && state.repairAttempts >= 0 && state.repairAttempts <= MAX_REPAIR_ATTEMPTS ? state.repairAttempts : DEFAULT_REPAIR_ATTEMPTS,
     music_lyrics_use_brief: state.musicLyricsUseBrief !== false,
     fullscreen: state.fullscreen === true,
     vram_handoff: state.vramHandoff === true,
@@ -386,6 +394,7 @@ export function stagePayload(state) {
   if (!session) return {};
   const payload = {
     nsfw: session.inputs?.nsfw !== false,
+    heat: Number.isInteger(session.inputs?.heat) ? session.inputs.heat : undefined,
     story: session.inputs?.story !== false,
     session_media: true,
     goals: session.goals || [],
@@ -401,6 +410,7 @@ export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }
   const payload = {
     ...sharedInferencePayload(state),
     ...stagePayload(state),
+    repair_attempts: Number.isInteger(state.repairAttempts) ? state.repairAttempts : DEFAULT_REPAIR_ATTEMPTS,
     duration_seconds: state.durationSeconds,
     aspect_ratio: state.aspectRatio,
     creative_brief: creativeBrief,
@@ -414,6 +424,7 @@ export function buildRefinePayload(state, { currentPrompt, instruction, creative
   const payload = {
     ...sharedInferencePayload(state),
     ...stagePayload(state),
+    repair_attempts: Number.isInteger(state.repairAttempts) ? state.repairAttempts : DEFAULT_REPAIR_ATTEMPTS,
     current_prompt: currentPrompt,
     instruction,
     duration_seconds: state.durationSeconds,
@@ -452,6 +463,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     lastVideoMode: preferences?.mode && preferences.mode !== "Music3" ? preferences.mode : "Reference",
     mediaFilter: "all",
     durationSeconds: preferences?.duration_seconds || 10,
+    repairAttempts: Number.isInteger(preferences?.repair_attempts) ? preferences.repair_attempts : DEFAULT_REPAIR_ATTEMPTS,
     aspectRatio: preferences?.aspect_ratio || "16:9",
     contextProfile: "auto",
     contextTokens: null,

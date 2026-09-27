@@ -14,6 +14,8 @@ prose, because headings and tag lists are not the register it was trained on.
 from __future__ import annotations
 
 import re
+
+from .. import heat as heat_levels
 from typing import Any
 
 from .base import Mode, Target, shared_checks, strip_fence
@@ -61,8 +63,19 @@ MIN_WORDS = 25
 LONG_WORDS = 450
 
 
-def system_prompt(mode: str, *, nsfw: bool = True, story: bool = True, variant: str | None = None) -> str:
-    parts = [BASE_CONTRACT, STORY_CLAUSE if story else FAITHFUL_CLAUSE, NSFW_CLAUSE if nsfw else DIGNITY_CLAUSE]
+def system_prompt(
+    mode: str, *, nsfw: bool = True, story: bool = True, variant: str | None = None, heat: int | None = None,
+) -> str:
+    # One dial, the same wording the document was written under, so what the
+    # studio shows and what the compile is told cannot drift apart.
+    level = heat_levels.resolve(heat=heat, nsfw=nsfw)
+    # Level 0 keeps the shipped wording: these contracts are vendored, and
+    # "clean" is exactly what their own dignity clause already says.
+    parts = [
+        BASE_CONTRACT,
+        STORY_CLAUSE if story else FAITHFUL_CLAUSE,
+        DIGNITY_CLAUSE if level == heat_levels.CLEAN else heat_levels.clause(level),
+    ]
     return " ".join(parts)
 
 

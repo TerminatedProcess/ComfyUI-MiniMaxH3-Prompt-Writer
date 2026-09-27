@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import mimetypes
+import os
 import shutil
 import math
 import time
@@ -34,13 +36,35 @@ MODE_LIMITS = _mode_limits()
 SESSION_MEDIA_MODE = "Reference"
 
 
-def _reset_cache() -> None:
-    if CACHE_ROOT.exists():
-        shutil.rmtree(CACHE_ROOT)
+# A studio session outlives the process: the brief, the document and the goals
+# are on disk and come back after a restart. Wiping every uploaded file at
+# import meant the media they refer to did not -- so any restart left a session
+# pointing at pictures that were gone ("no longer loaded, add it again"), and
+# the user saw it as "my media disappears when I refresh".
+STALE_MEDIA_SECONDS = 7 * 24 * 60 * 60
+
+
+def _prune_cache(now: float | None = None, max_age_seconds: float = STALE_MEDIA_SECONDS) -> list[Path]:
+    """Drop session media nobody has touched in a week; keep the rest.
+
+    Age-based rather than all-or-nothing: the cache still cannot grow forever,
+    and the session you were working in five minutes ago survives a restart.
+    """
     CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    cutoff = (now if now is not None else time.time()) - max_age_seconds
+    removed: list[Path] = []
+    for entry in CACHE_ROOT.iterdir():
+        try:
+            if not entry.is_dir() or entry.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+        removed.append(entry)
+    return removed
 
 
-_reset_cache()
+_prune_cache()
 
 
 def parse_session_id(value: str | None) -> str:
@@ -94,15 +118,61 @@ class MediaStore:
         self.sessions: dict[str, list[dict[str, Any]]] = {}
         self.last_accessed: dict[str, float] = {}
 
+    # ------------------------------------------------------------ persistence
+    #
+    # The manifest used to live only in memory, so a restart lost what was
+    # attached even when the files themselves were still on disk -- the session
+    # came back with its brief and document intact, pointing at pictures the
+    # studio could no longer see. It is written beside the media it describes.
+
+    @staticmethod
+    def _manifest_path(session_id: str) -> Path:
+        return CACHE_ROOT / session_id / "manifest.json"
+
+    def _save(self, session_id: str) -> None:
+        assets = self.sessions.get(session_id)
+        path = self._manifest_path(session_id)
+        try:
+            if not assets:
+                path.unlink(missing_ok=True)
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp = path.with_suffix(".json.tmp")
+            temp.write_text(json.dumps(assets, ensure_ascii=False, default=str), encoding="utf-8")
+            os.replace(temp, path)
+        except OSError:
+            # Persistence is a convenience: never fail an upload over it.
+            pass
+
+    def _load(self, session_id: str) -> None:
+        """Bring a session's manifest back, minus anything whose files are gone."""
+        if session_id in self.sessions:
+            return
+        try:
+            raw = json.loads(self._manifest_path(session_id).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(raw, list):
+            return
+        restored = [
+            asset for asset in raw
+            if isinstance(asset, dict) and asset.get("_original_path")
+            and Path(asset["_original_path"]).exists()
+        ]
+        if restored:
+            self.sessions[session_id] = restored
+
     def touch(self, session_id: str, *, now: float | None = None) -> None:
         self.last_accessed[session_id] = time.monotonic() if now is None else now
 
     def list(self, session_id: str) -> list[dict[str, Any]]:
+        self._load(session_id)
         if session_id in self.sessions:
             self.touch(session_id)
         return [self.public(asset) for asset in self.sessions.get(session_id, [])]
 
     def assets(self, session_id: str) -> list[dict[str, Any]]:
+        self._load(session_id)
         self.touch(session_id)
         return self.sessions.setdefault(session_id, [])
 
@@ -196,6 +266,7 @@ class MediaStore:
             self._assign_reference_identity(assets, base)
         else:
             self._renumber(assets, mode)
+        self._save(session_id)
         return self.public(base)
 
     def _prepare_asset(
@@ -299,6 +370,7 @@ class MediaStore:
         else:
             self._renumber(assets, old_asset["mode"])
         shutil.rmtree(Path(old_asset["_original_path"]).parent, ignore_errors=True)
+        self._save(session_id)
         return self.public(replacement)
 
     def remove(self, session_id: str, asset_id: str) -> None:
@@ -307,6 +379,7 @@ class MediaStore:
         assets.remove(asset)
         shutil.rmtree(Path(asset["_original_path"]).parent, ignore_errors=True)
         self._renumber(assets, asset["mode"])
+        self._save(session_id)
 
     def clear(self, session_id: str) -> None:
         self.sessions.pop(session_id, None)
@@ -344,6 +417,7 @@ class MediaStore:
         else:
             self.sessions.pop(session_id, None)
             self.last_accessed.pop(session_id, None)
+        self._save(session_id)
         for asset in removed:
             shutil.rmtree(Path(asset["_original_path"]).parent, ignore_errors=True)
         session_dir = CACHE_ROOT / session_id
@@ -428,6 +502,7 @@ class MediaStore:
             shutil.rmtree(prepared["derived_dir"], ignore_errors=True)
             raise MediaError("MEDIA_CHANGED", "The video changed while it was being resampled. Try again.")
         asset.update(prepared["processed"])
+        self._save(session_id)
         asset["content_revision"] = prepared["content_revision"]
         old_paths = prepared["old_paths"]
         asset_dir = prepared["asset_dir"]
@@ -448,9 +523,11 @@ class MediaStore:
         ordered = iter(by_id[asset_id] for asset_id in ordered_ids)
         self.sessions[session_id] = [next(ordered) if asset["mode"] == mode else asset for asset in assets]
         self._renumber(self.sessions[session_id], mode)
+        self._save(session_id)
         return self.list(session_id)
 
     def manifest(self, session_id: str, mode: str) -> dict[str, Any]:
+        self._load(session_id)
         if session_id in self.sessions:
             self.touch(session_id)
         assets = [asset for asset in self.sessions.get(session_id, []) if asset["mode"] == mode and asset.get("status") != "needs_edit"]

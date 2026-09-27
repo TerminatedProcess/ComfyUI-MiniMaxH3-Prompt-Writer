@@ -152,6 +152,22 @@ def estimate_visual_tokens(
     return total, details, bool(visual_inputs)
 
 
+# How many corrections to try before handing the problem back to the user. Each
+# attempt is a model call on their machine and their time, so it is theirs to
+# set; three is enough to clear the ordinary paraphrase failures without the
+# studio silently grinding.
+DEFAULT_REPAIR_ATTEMPTS = 3
+MAX_REPAIR_ATTEMPTS = 5
+
+
+def repair_attempt_budget(assembled: dict[str, Any]) -> int:
+    """The user's repair-attempt setting, clamped. 0 means never repair."""
+    raw = (assembled.get("input") or {}).get("repair_attempts", DEFAULT_REPAIR_ATTEMPTS)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return DEFAULT_REPAIR_ATTEMPTS
+    return max(0, min(MAX_REPAIR_ATTEMPTS, raw))
+
+
 def non_thinking_output_tokens(assembled: dict[str, Any]) -> int:
     mode = assembled.get("input", {}).get("mode")
     if assembled.get("generic_stage"):

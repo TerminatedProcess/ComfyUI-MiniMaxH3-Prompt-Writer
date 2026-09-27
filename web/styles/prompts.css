@@ -96,3 +96,9 @@
 .h3ps-system-prompt-panel > footer small { color: #494951; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--h3ps-font-label-sm); }
 .h3ps-system-prompt-panel > footer button { color: var(--h3ps-muted); font-size: var(--h3ps-font-label); }
 .h3ps-system-prompt-panel > footer button:hover { color: var(--h3ps-text); }
+
+/* Copy sits between the character count and Restore default: an icon button, so
+   it must not inherit the footer's text-button look or its margin-left:auto. */
+.h3ps-system-prompt-panel > footer .h3ps-field-copy { width: calc(24px * var(--h3ps-interface-scale)); height: calc(24px * var(--h3ps-interface-scale)); margin-left: auto; color: var(--h3ps-muted); }
+.h3ps-system-prompt-panel > footer .h3ps-field-copy:hover { color: var(--h3ps-text); }
+.h3ps-system-prompt-panel > footer .h3ps-field-copy + button { margin-left: calc(10px * var(--h3ps-interface-scale)); }

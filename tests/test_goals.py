@@ -106,6 +106,63 @@ class PresenceGoalTests(unittest.TestCase):
         self.assertEqual(violations, [])
 
 
+    def test_a_reworded_requirement_is_still_met(self):
+        """The reported bug: the compile is *supposed* to reword.
+
+        Every phrase here was reported unmet by the old substring check while
+        the prompt plainly said it -- one inserted adverb, one verb tense, one
+        extra adjective each. Four false failures also burned a repair pass and
+        then threw the repaired draft away.
+        """
+        prompt = (
+            "A woman with softly curled brown hair stands directly in front of a polished wooden desk. She wears a "
+            "thin white dress styled loosely like a robe wrapped around her waist and secured with a belt, the fabric "
+            "thin enough to reveal the outline of her erect nipples pressing against it as she wears no undergarments."
+        )
+        for phrase in (
+            "styled like a robe wrapped around the waist and secured with a belt to keep it from falling open",
+            "thin fabric",
+            "standing in front of a wooden desk",
+            "not wearing undergarments",
+        ):
+            ledger = [goals.new_goal("keep it", goals.KIND_PRESENCE, must_include=(phrase,))]
+            evaluated, violations, _pending = goals.evaluate(ledger, None, prompt)
+            self.assertEqual(evaluated[0]["verdict"], goals.VERDICT_MET, phrase)
+            self.assertEqual(violations, [], phrase)
+
+    def test_wording_that_is_genuinely_absent_is_still_unmet(self):
+        """The loosened check must still fail the thing it exists to catch."""
+        prompt = "A woman at a wooden desk in a mid-century study, smiling at the camera."
+        for phrase in ("a red vintage motorcycle parked outside", "Pane e Sale", "wearing a leather jacket"):
+            ledger = [goals.new_goal("keep it", goals.KIND_PRESENCE, must_include=(phrase,))]
+            evaluated, violations, _pending = goals.evaluate(ledger, None, prompt)
+            self.assertEqual(evaluated[0]["verdict"], goals.VERDICT_UNMET, phrase)
+            self.assertTrue(violations, phrase)
+
+    def test_a_name_is_all_or_nothing_even_when_the_rest_survives(self):
+        """A dropped name is the whole failure: it is what the user steers with."""
+        ledger = [goals.new_goal(
+            "name the bakery", goals.KIND_PRESENCE,
+            must_include=("the Pane e Sale bakery sign above the door",),
+        )]
+        evaluated, _violations, _pending = goals.evaluate(
+            ledger, None, "the bakery sign above the door glows over the street",
+        )
+        self.assertEqual(evaluated[0]["verdict"], goals.VERDICT_UNMET)
+
+
+    def test_sentence_case_is_not_a_name(self):
+        """A capital at the start of a phrase is grammar, not a proper noun."""
+        ledger = [goals.new_goal(
+            "keep the action", goals.KIND_PRESENCE,
+            must_include=("Taking a selfie with her arm extended toward the camera",),
+        )]
+        evaluated, _violations, _pending = goals.evaluate(
+            ledger, None, "she extends her right arm toward the camera to take a selfie",
+        )
+        self.assertEqual(evaluated[0]["verdict"], goals.VERDICT_MET)
+
+
 class JudgedGoalTests(unittest.TestCase):
     def setUp(self):
         self.ledger = [goals.new_goal("do not make it feel like a commercial")]

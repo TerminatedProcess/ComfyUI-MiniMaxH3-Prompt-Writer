@@ -18,24 +18,57 @@ import json
 import re
 from typing import Any
 
-from . import generic, goals as goal_ledger
+from . import generic, heat as heat_levels, goals as goal_ledger
 from .scene_bible import distinctive_tokens
 from .text_normalization import normalize_unicode_text
 
 FIELD_LIST = ", ".join(generic.FIELDS)
+SCENE_FIELD_LIST = ", ".join(generic.SCENE_FIELDS)
+PERSON_FIELD_LIST = ", ".join(generic.PERSON_FIELDS)
+RELATION_LIST = ", ".join(f'"{name}" ({meaning})' for name, meaning in generic.RELATIONS.items())
+# How a second person is addressed. Spelled out for the model, because the whole
+# point is that an attribute belongs to somebody.
+PEOPLE_RULE = (
+    "PEOPLE. Count the people first, then write one \"people\" object for EACH of them.\n"
+    f"- Each object may hold {', '.join(chr(34) + name + chr(34) for name in generic.PERSON_FIELDS)} -- that "
+    "person's own, never anybody else's. A man's tights do not go in the woman's wardrobe.\n"
+    f"- Up to {generic.MAX_PEOPLE} people. The first is A, the second B, the third C, and a letter always means "
+    "the same body everywhere in the answer.\n"
+    "- NEVER describe two people in one field. \"two dancers\" as a subject is wrong: give each their own object.\n"
+    "- One person alone: still use \"people\", with a single object in it.\n"
+    "- Only use a letter in \"relations\" if you wrote that person's object in this answer."
+)
 
 BUILD_INSTRUCTIONS = f"""You are building a model-agnostic scene document for an image or video prompt. Return only JSON.
 
 Use exactly this shape:
-{{"observed": {{"<field>": "<what the reference media actually shows>"}}, "scene": {{"<field>": "<the fact for the finished shot>"}}, "from_brief": {{"<field>": "<the exact words copied from the user's brief that this field came from>"}}}}
+{{"observed": {{"<scene field>": "<what the reference media actually shows>"}}, "scene": {{"<scene field>": "<the fact for the finished shot>"}}, "people": [{{"<person field>": "<about that one person>"}}], "from_brief": {{"<field>": "<the exact words copied from the user's brief that this field came from>"}}, "relations": [{{"from": "<A|B|a noun>", "rel": "<relation>", "to": "<A|B|a noun>", "qualifier": "<optional, <=5 words>"}}]}}
 
-Fields, all optional in all three objects: {FIELD_LIST}.
+"people" is ONE OBJECT PER PERSON, in frame order. Everything inside an object belongs to that person and nobody else:
+{{"people": [{{"subject": "a woman in her 20s", "wardrobe": "a white leotard", "pose": "curled up, knees drawn in"}},
+            {{"subject": "a man in his 30s", "wardrobe": "white tights, no shirt", "pose": "kneeling on one knee"}}],
+ "relations": [{{"from": "A", "rel": "on", "to": "B", "qualifier": "on his shoulder"}}]}}
+The first object is A, the second is B, the third is C. Check each object before you finish: everything in it must describe the SAME body.
+
+Scene fields, for "observed" and "scene": {SCENE_FIELD_LIST}.
+Person fields, for each object in "people": {PERSON_FIELD_LIST}.
+
+{PEOPLE_RULE}
+"relations" is a list of how things sit against each other: [{{"from": "A", "rel": "on", "to": "the couch"}}, {{"from": "B", "rel": "on", "to": "A", "qualifier": "across her lap"}}].
+- "from" and "to" are a person letter (A, B, C) or a plain noun ("the couch", "the desk").
+- "rel" is EXACTLY one of: {RELATION_LIST}.
+- "occludes" means "from where the camera is, this hides part of that" -- it is how you say which thing is in front. "left_of" and "right_of" are as the camera sees them, not the subject's own left and right.
+- "qualifier" is at most five words for what the relation alone cannot say ("across her lap", "by the shoulders").
+- Only relations you can see or that the user stated. Do not relate every object in the room: the people, what they touch, and what sits in front of or behind them.
 
 Rules:
 - "observed" describes ONLY what is literally visible or audible in the supplied reference media. Omit a field you cannot see. Never guess there. If no media is supplied, return an empty object.
 - "scene" is the shot to make: the user's brief first, the reference media second, your own judgement last.
 - ONE short factual clause per field: a phrase or a single sentence, at most 25 words. Not a paragraph. No lists, no hedging, no "maybe".
 - Colours, materials, counts and spatial relationships belong in the field they describe; be specific about them.
+- "pose" is the body, and it is never left to the reader. Write it as: one of standing, sitting, perched, leaning, kneeling, crouching, lying, walking -- then which way they face the camera (facing the camera, three-quarter, in profile, from behind) -- then what holds them up if anything ("on a wooden chair", "against the desk edge"). Example: "sitting, three-quarter to the camera, on a wooden chair".
+- "staging" places everything else around the subject, relative to the CAMERA, because "in front of the desk" does not say from whose side. Name what is behind the subject, what is between the subject and the camera, and what is to each side, and give the camera's height and distance if you can see them. Example: "desk behind her, window behind the desk, camera at eye level a few feet away". Only what the media actually shows.
+- When reference media is supplied, "pose" and "staging" are READ OFF IT, never inferred from how the brief phrases things: a brief saying "at her desk" says nothing about whether she is sitting.
 - "exclusions" lists what must NOT appear.
 - "from_brief" is how a field is credited to the user rather than to you. When a field is based on something the user actually wrote, copy that fragment of their brief VERBATIM -- their characters, not a paraphrase. Omit the field if you expanded or invented it. Copying words they did not write does not make the field theirs; it is checked against the brief.
 - Leave a field out of "scene" entirely rather than writing "unknown", "none" or "not specified".
@@ -50,6 +83,13 @@ FAITHFUL_BUILD_CLAUSE = (
     "Story builder is OFF: fill only the fields the brief or the reference media actually support, and leave "
     "everything else out."
 )
+NSFW_EXPAND_CLAUSE = (
+    "Naughty is ON, and expanding is where it applies: develop the sensual or explicit dimension of this scene "
+    "rather than only permitting it. Bring out the body, the wardrobe and how it sits, the contact between "
+    "people, the charge in the look and the mood, and say it plainly, without euphemism or moralising. Stay "
+    "inside what the user wrote and what any reference shows -- heighten their scene, never replace it with a "
+    "different one, and never contradict a fact they gave."
+)
 NSFW_BUILD_CLAUSE = (
     "Adult or explicit content is permitted where the brief calls for it; describe it plainly, without euphemism "
     "or refusal."
@@ -58,12 +98,16 @@ NSFW_BUILD_CLAUSE = (
 TURN_INSTRUCTIONS = f"""You are steering a model-agnostic scene document through conversation. Return only JSON.
 
 Use exactly this shape:
-{{"reply": "<one short sentence to the user>", "patch": {{"<field>": "<new value>"}}, "observed": {{"<field>": "<what the reference media actually shows>"}}, "goals": [{{"text": "<standing instruction>", "kind": "field|presence|judged", "fields": ["<field>"], "must_include": ["<exact text>"]}}]}}
+{{"reply": "<one short sentence to the user>", "patch": {{"<field>": "<new value>"}}, "observed": {{"<field>": "<what the reference media actually shows>"}}, "relations": [{{"from": "B", "rel": "on", "to": "A", "qualifier": "across her lap"}}], "goals": [{{"text": "<standing instruction>", "kind": "field|presence|judged", "fields": ["<field>"], "must_include": ["<exact text>"]}}]}}
 
 Fields: {FIELD_LIST}.
 
+{PEOPLE_RULE}
+
 Rules:
 - "patch" carries facts the user just stated or changed. Only fields they actually addressed. Their words win over the reference media.
+- "relations" replaces how things sit against each other, same shape as the build: [{{"from": "B", "rel": "on", "to": "A", "qualifier": "across her lap"}}]. Send it when the user corrects an arrangement, and omit it otherwise.
+- A correction about the body ("she is standing, not sitting", "she is facing away") is a "pose" patch; one about where things sit relative to the camera ("the desk is behind her", "the window is behind the viewer") is a "staging" patch. Neither belongs in "action", which is what she is DOING.
 - "observed" is for when the user says the document is not following the reference media: re-read the supplied media and report what it ACTUALLY shows for the fields in question. Omit it otherwise, and never put a guess in it.
 - "goals" carries standing instructions -- a rule that must keep holding from now on ("always follow the clothing colours in the image", "never mention a brand", "keep her jacket red"). A one-off fact correction is a patch, NOT a goal. A request can be both.
   - kind "field" when the rule is that specific fields must come from the reference media: list them in "fields".
@@ -200,7 +244,7 @@ def _clean_map(raw: Any) -> dict[str, str]:
         return {}
     result: dict[str, str] = {}
     for key, value in raw.items():
-        if key not in generic.FIELDS or not isinstance(value, str):
+        if not generic.is_field(key) or not isinstance(value, str):
             continue
         text = normalize_unicode_text(value).strip()
         if not text or text.lower() in {"none", "unknown", "n/a", "not specified", "unspecified", "null"}:
@@ -267,22 +311,26 @@ def quoted_from_brief(quote: Any, brief: str) -> bool:
     return text in _normalized_for_quote(brief)
 
 
-def build_instructions(*, nsfw: bool, story: bool) -> str:
+def build_instructions(*, nsfw: bool = True, story: bool, heat: int | None = None) -> str:
+    level = heat_levels.resolve(heat=heat, nsfw=nsfw)
     parts = [BUILD_INSTRUCTIONS, STORY_BUILD_CLAUSE if story else FAITHFUL_BUILD_CLAUSE]
-    if nsfw:
-        parts.append(NSFW_BUILD_CLAUSE)
+    parts.append(heat_levels.clause(level))
+    # Story builder off used to cap the dial here, so a user asking for Explicit
+    # quietly got Allowed. The dial is the user talking: it develops what it
+    # names, and Story builder still governs everything else.
+    if not story and heat_levels.develops_adult(level):
+        parts.append(HEAT_OVERRIDES_FAITHFUL)
     return "\n\n".join(parts)
 
 
-def turn_instructions(*, nsfw: bool, story: bool) -> str:
+def turn_instructions(*, nsfw: bool = True, story: bool, heat: int | None = None) -> str:
     parts = [TURN_INSTRUCTIONS]
     if story:
         parts.append(
             "Story builder is ON, so you may also fill fields the user has not addressed when the change implies "
             "them -- but never overwrite a fact they gave."
         )
-    if nsfw:
-        parts.append(NSFW_BUILD_CLAUSE)
+    parts.append(heat_levels.clause(heat_levels.resolve(heat=heat, nsfw=nsfw)))
     return "\n\n".join(parts)
 
 
@@ -294,13 +342,15 @@ def assemble_build(
     media_inputs: list[dict[str, Any]],
     doc: dict[str, Any] | None,
     goals: list[dict[str, Any]],
-    nsfw: bool,
+    nsfw: bool = True,
+    heat: int | None = None,
     story: bool,
     duration_seconds: float | None,
     aspect_ratio: str | None,
 ) -> dict[str, Any]:
     """One request that reads the references and writes the whole document."""
-    instructions = build_instructions(nsfw=nsfw, story=story)
+    level = heat_levels.resolve(heat=heat, nsfw=nsfw)
+    instructions = build_instructions(heat=level, story=story)
     references = "\n".join(
         f"{asset.get('reference') or asset.get('filename')}: {asset.get('filename')} ({asset.get('type')})"
         for asset in manifest.get("assets", [])
@@ -334,7 +384,8 @@ def assemble_build(
             "aspect_ratio": aspect_ratio,
             "creative_brief": brief,
             "media_manifest": manifest,
-            "nsfw": nsfw,
+            "nsfw": heat_levels.permits_adult(level),
+            "heat": level,
             "story": story,
         },
         "media_inputs": media_inputs,
@@ -367,10 +418,24 @@ EXPAND_FAITHFUL_CLAUSE = (
 )
 
 
-def expand_instructions(*, nsfw: bool, story: bool) -> str:
+# "Do not invent new content" and "develop the sensual dimension" are flatly
+# contradictory, and the model obeys whichever it read first -- so with Story
+# builder off the dial did nothing at all, at any level. The user set the dial
+# deliberately: it wins, for the one thing it names and nothing else.
+HEAT_OVERRIDES_FAITHFUL = (
+    "The Naughty level above is an explicit instruction from the user and outranks \"do not invent\": develop the "
+    "sexual or sensual dimension it asks for, and invent nothing else -- no new places, props, events or people."
+)
+
+
+def expand_instructions(*, nsfw: bool = True, story: bool, heat: int | None = None) -> str:
+    # Expanding is where the dial does its work: the brief is where asking
+    # happens, so the level applies in full, whatever Story builder says.
+    level = heat_levels.resolve(heat=heat, nsfw=nsfw)
     parts = [EXPAND_INSTRUCTIONS, EXPAND_STORY_CLAUSE if story else EXPAND_FAITHFUL_CLAUSE]
-    if nsfw:
-        parts.append(NSFW_BUILD_CLAUSE)
+    parts.append(heat_levels.clause(level))
+    if not story and heat_levels.develops_adult(level):
+        parts.append(HEAT_OVERRIDES_FAITHFUL)
     return "\n\n".join(parts)
 
 
@@ -380,7 +445,8 @@ def assemble_expand(
     brief: str,
     manifest: dict[str, Any],
     media_inputs: list[dict[str, Any]],
-    nsfw: bool,
+    nsfw: bool = True,
+    heat: int | None = None,
     story: bool,
 ) -> dict[str, Any]:
     """Expand the brief itself, on demand and visibly.
@@ -391,7 +457,8 @@ def assemble_expand(
     your phrasing. Here you read the result, edit it, or undo it, and it is
     yours because you accepted it.
     """
-    instructions = expand_instructions(nsfw=nsfw, story=story)
+    level = heat_levels.resolve(heat=heat, nsfw=nsfw)
+    instructions = expand_instructions(heat=level, story=story)
     references = "\n".join(
         f"{asset.get('reference') or asset.get('filename')}: {asset.get('filename')} ({asset.get('type')})"
         for asset in manifest.get("assets", [])
@@ -412,7 +479,8 @@ def assemble_expand(
             "aspect_ratio": None,
             "creative_brief": brief,
             "media_manifest": manifest,
-            "nsfw": nsfw,
+            "nsfw": heat_levels.permits_adult(level),
+            "heat": level,
             "story": story,
         },
         "media_inputs": media_inputs,
@@ -421,6 +489,145 @@ def assemble_expand(
         "messages": [
             {"role": "system", "name": "brief_expansion_contract", "content": instructions},
             {"role": "user", "content": user_content},
+        ],
+    }
+
+
+DESCRIBE_INSTRUCTIONS = """Look at the attached reference image and write the user's creative brief for it. Return only the brief.
+
+Rules:
+- Describe what is actually in the picture: the subject, what they are wearing and doing, where they are, the light, the time of day, the mood, and how the shot is framed.
+- Say plainly whether the subject is standing, sitting, kneeling, lying or leaning, which way they face the camera, and what is behind them versus between them and the camera. A reader must not have to guess the body or the layout.
+- Write it as a brief a person would type: plain prose, one or two short paragraphs, no headings, no section labels, no bullet lists, no prompt syntax, no reference tags.
+- Stay under 200 words.
+- Do not describe camera equipment, model settings, resolution, aspect ratio or duration, and never name a file, an artist or a model.
+- Never add commentary about the image or about these instructions, and never say "this image shows"; write the scene itself."""
+
+DESCRIBE_STORY_CLAUSE = (
+    "This brief is for a video that starts from this frame, so add the motion the still implies -- what the "
+    "subject does next, how the scene moves around them. Keep it to what the picture plausibly leads into; never "
+    "contradict what is visible."
+)
+DESCRIBE_FAITHFUL_CLAUSE = (
+    "Describe only what is visible. Do not invent a backstory, a name, an action the picture does not show, or "
+    "anything outside the frame."
+)
+
+
+def describe_instructions(*, nsfw: bool = True, story: bool, heat: int | None = None) -> str:
+    parts = [DESCRIBE_INSTRUCTIONS, DESCRIBE_STORY_CLAUSE if story else DESCRIBE_FAITHFUL_CLAUSE]
+    parts.append(heat_levels.clause(heat_levels.resolve(heat=heat, nsfw=nsfw)))
+    return "\n\n".join(parts)
+
+
+def assemble_describe(
+    *,
+    session_id: str,
+    asset: dict[str, Any],
+    manifest: dict[str, Any],
+    media_inputs: list[dict[str, Any]],
+    nsfw: bool = True,
+    heat: int | None = None,
+    story: bool,
+) -> dict[str, Any]:
+    """Read ONE reference image and write a brief from it.
+
+    Deliberately single-asset: the studio triggers this by double-clicking a
+    specific picture, and sending the whole media set would describe a scene the
+    user did not point at. The manifest and media_inputs are narrowed to that
+    asset by the caller.
+    """
+    level = heat_levels.resolve(heat=heat, nsfw=nsfw)
+    instructions = describe_instructions(heat=level, story=story)
+    label = asset.get("reference") or asset.get("filename")
+    return {
+        "schema_version": 1,
+        "completion_policy": "single_call",
+        "generic_stage": "describe",
+        "sampling": STRUCTURED_SAMPLING,
+        "guide": {"id": "brief-from-image", "title": "Creative brief from a reference image"},
+        "input": {
+            "mode": "T2VA",
+            "duration_seconds": None,
+            "aspect_ratio": None,
+            "creative_brief": "",
+            "media_manifest": manifest,
+            "nsfw": heat_levels.permits_adult(level),
+            "heat": level,
+            "story": story,
+        },
+        "media_inputs": media_inputs,
+        "supporting_guides": [],
+        "system_prompt": {"custom": False, "content": instructions},
+        "messages": [
+            {"role": "system", "name": "brief_from_image_contract", "content": instructions},
+            {
+                "role": "user",
+                "content": f"The reference image attached to this message is {label}. Write the brief for it.",
+            },
+        ],
+    }
+
+
+def read_json_object(text: str) -> dict[str, Any]:
+    """A model answer as a dict, or a ConversationError naming what it said."""
+    parsed, _salvaged = _parse_json_object(text, "INVALID_JSON", "The model did not answer with JSON.")
+    return parsed
+
+
+POSE_PROBE_INSTRUCTIONS = """You are reading evidence off a picture. Return only JSON, no prose.
+
+Answer every key. Judge ONLY what the picture shows; if something is not visible, say so with false or "none visible".
+
+Never describe the pose, never name it, and never explain your answer. Report what is there."""
+
+
+def assemble_pose_probe(
+    *,
+    session_id: str,
+    asset: dict[str, Any],
+    manifest: dict[str, Any],
+    media_inputs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Ask a picture what is visible, never what the pose is.
+
+    The conclusion question is the one the model gets wrong: asked whether a
+    subject was standing or sitting it answered "sitting" from her torso height,
+    and answered it again when the choice was a fixed menu. Asked whether the
+    chair seat was occupied and where her body was relative to the desk edge, the
+    same model on the same picture got all of it right. See backend/pose_probe.py.
+    """
+    from . import pose_probe
+
+    questions = "\n".join(f"- {key}: {text}" for key, text in pose_probe.QUESTIONS.items())
+    label = asset.get("reference") or asset.get("filename")
+    return {
+        "schema_version": 1,
+        "completion_policy": "single_call",
+        "generic_stage": "pose_probe",
+        "sampling": STRUCTURED_SAMPLING,
+        "guide": {"id": "pose-evidence", "title": "Pose evidence probe"},
+        "input": {
+            "mode": "T2VA",
+            "duration_seconds": None,
+            "aspect_ratio": None,
+            "creative_brief": "",
+            "media_manifest": manifest,
+            "nsfw": True,
+            "story": False,
+        },
+        "media_inputs": media_inputs,
+        "supporting_guides": [],
+        "system_prompt": {"custom": False, "content": POSE_PROBE_INSTRUCTIONS},
+        "messages": [
+            {"role": "system", "name": "pose_probe_contract", "content": POSE_PROBE_INSTRUCTIONS},
+            {
+                "role": "user",
+                "content": (
+                    f"Read the person in {label}.\n\nUse exactly this shape:\n{pose_probe.schema_line()}\n\n"
+                    f"What each key means:\n{questions}"
+                ),
+            },
         ],
     }
 
@@ -465,7 +672,8 @@ def assemble_turn(
     conversation: list[dict[str, Any]],
     manifest: dict[str, Any],
     media_inputs: list[dict[str, Any]],
-    nsfw: bool,
+    nsfw: bool = True,
+    heat: int | None = None,
     story: bool,
 ) -> dict[str, Any]:
     """One conversation turn.
@@ -475,7 +683,8 @@ def assemble_turn(
     alone, and asking the user to say which kind of correction they meant would
     put the mechanism in their way.
     """
-    instructions = turn_instructions(nsfw=nsfw, story=story)
+    level = heat_levels.resolve(heat=heat, nsfw=nsfw)
+    instructions = turn_instructions(heat=level, story=story)
     records = generic.records(doc)
     document = {
         key: {
@@ -516,7 +725,8 @@ def assemble_turn(
             "aspect_ratio": None,
             "creative_brief": message,
             "media_manifest": manifest,
-            "nsfw": nsfw,
+            "nsfw": heat_levels.permits_adult(level),
+            "heat": level,
             "story": story,
         },
         "media_inputs": media_inputs,
@@ -549,8 +759,21 @@ def apply_build(
         "INVALID_GENERIC_BUILD",
         "The model did not return a usable scene document. Try Generate again.",
     )
-    observed = _clean_map(parsed.get("observed")) if has_media else {}
-    scene = _clean_map(parsed.get("scene"))
+    raw_scene = parsed.get("scene") if isinstance(parsed.get("scene"), dict) else {}
+    raw_observed = parsed.get("observed") if isinstance(parsed.get("observed"), dict) else {}
+    observed = _clean_map(raw_observed) if has_media else {}
+    scene = _clean_map(raw_scene)
+    # "people" is the preferred shape; suffixed keys sent directly still work.
+    # Taken from wherever the model put the list: asked for it at the top level
+    # it nested it under "scene" instead, which is a reasonable place for it and
+    # not worth losing a good answer over.
+    crowd = _clean_map(_people_map(
+        parsed.get("people") or raw_scene.get("people") or raw_observed.get("people")
+    ))
+    scene = {**crowd, **scene}
+    if has_media:
+        # Read off the picture, so they lock like any other observation.
+        observed = {**crowd, **observed}
     claimed = parsed.get("from_brief") if isinstance(parsed.get("from_brief"), dict) else {}
     if not scene and not observed:
         raise ConversationError(
@@ -574,7 +797,9 @@ def apply_build(
     result = doc
     changed: list[str] = []
     protected: list[str] = []
-    for key in generic.FIELDS:
+    # The union: the model may introduce a second person this turn, and those
+    # keys are not in the document yet.
+    for key in sorted({*generic.doc_fields(doc), *observed, *scene}, key=generic.sort_key):
         seen = observed.get(key)
         stated = scene.get(key)
         value = stated or seen
@@ -595,7 +820,74 @@ def apply_build(
         else:
             result = generic.set_field(result, key, value, generic.ORIGIN_INVENTED)
         changed.append(key)
+    # Seen in the picture, so the compile may not quietly drop them; without
+    # media the model is proposing an arrangement, which is not a fact.
+    result, relation_count = _apply_relations(
+        result, parsed.get("relations"),
+        origin=generic.ORIGIN_ASSET if has_media else generic.ORIGIN_INVENTED,
+    )
+    if relation_count:
+        changed.append("relations")
     return result, tuple(changed), tuple(protected)
+
+
+def _people_map(raw: Any) -> dict[str, str]:
+    """A list of people, flattened onto the document's per-person keys.
+
+    The model is asked for [{subject, wardrobe, pose...}, {...}] rather than for
+    "subject#2" keys, because a flat key list lets it fill each field
+    independently -- observed on a two-dancer picture: it wrote the woman as A,
+    then put the MAN's tights in A's wardrobe and left B's empty. An object per
+    person makes the binding syntactic instead of a rule to remember.
+    """
+    if not isinstance(raw, list):
+        return {}
+    flattened: dict[str, str] = {}
+    for index, person in enumerate(raw[: generic.MAX_PEOPLE], start=1):
+        if not isinstance(person, dict):
+            continue
+        for field in generic.PERSON_FIELDS:
+            value = person.get(field)
+            if isinstance(value, str) and value.strip():
+                flattened[generic.person_key(field, index)] = value
+    return flattened
+
+
+def _apply_relations(doc: dict[str, Any], raw: Any, *, origin: str) -> tuple[dict[str, Any], int]:
+    """Fold a model's relation list into the document.
+
+    A malformed edge is dropped, never fatal: relations are an improvement on
+    the document and one bad row must not cost the user the whole build. The
+    existing set is replaced rather than merged, because a rebuild re-reads the
+    same picture -- except for edges the user owns, which survive.
+    """
+    if not isinstance(raw, list):
+        return doc, 0
+    kept = [edge for edge in generic.edges(doc) if edge.get("origin") in (generic.ORIGIN_USER, generic.ORIGIN_OVERRIDE)]
+    added: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            edge = generic.validate_edge({**item, "origin": origin})
+        except generic.GenericError:
+            continue
+        # A letter is only a person if the document describes that person. The
+        # model answered a two-dancer picture with one blob subject and a
+        # relation "A on B" -- letters pointing at nobody, which would read as
+        # structure while meaning nothing.
+        if any(
+            (index := generic.endpoint_person(end)) and not generic.record(doc, generic.person_key("subject", index))["value"]
+            for end in (edge["from"], edge["to"])
+        ):
+            continue
+        added.append(edge)
+    if not added and not kept:
+        return doc, 0
+    try:
+        return generic.set_edges(doc, [*kept, *added][: generic.MAX_EDGES]), len(added)
+    except generic.GenericError:
+        return doc, 0
 
 
 def _parsed_goals(raw: Any) -> list[dict[str, Any]]:
@@ -615,7 +907,7 @@ def _parsed_goals(raw: Any) -> list[dict[str, Any]]:
         if not text:
             continue
         kind = item.get("kind") if item.get("kind") in goal_ledger.KINDS else goal_ledger.KIND_JUDGED
-        fields = tuple(name for name in (item.get("fields") or []) if name in generic.FIELDS)
+        fields = tuple(name for name in (item.get("fields") or []) if generic.is_field(name))
         must_include = tuple(
             normalize_unicode_text(str(value)).strip()
             for value in (item.get("must_include") or [])
@@ -672,6 +964,11 @@ def apply_turn(
     if patch:
         result, patch_changed, _protected = generic.apply_patch(result, patch, source=generic.SOURCE_USER)
         changed.extend(key for key in patch_changed if key not in changed)
+    # The user correcting an arrangement owns it, exactly like a field they fix:
+    # a later re-observation of the same picture must not walk it back.
+    result, relation_count = _apply_relations(result, parsed.get("relations"), origin=generic.ORIGIN_USER)
+    if relation_count and "relations" not in changed:
+        changed.append("relations")
     additions = _parsed_goals(parsed.get("goals"))
     if not additions and STANDING_INSTRUCTION.search(message or ""):
         # The user said "always" / "from now on" and the model recorded no goal.

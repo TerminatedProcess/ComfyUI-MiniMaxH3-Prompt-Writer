@@ -31,6 +31,21 @@ class StandaloneHostTest(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await self.client.close()
 
+    async def test_web_assets_must_be_revalidated_every_load(self) -> None:
+        """The studio is served from the repo, so it changes under the server.
+
+        Without this the browser applies heuristic freshness and keeps a stale
+        module or stylesheet: an edit "does nothing" until a hard refresh.
+        """
+        for path in ("/main.js", "/styles/workbench.css"):
+            response = await self.client.get(path)
+            self.assertEqual(response.status, 200, path)
+            self.assertEqual(response.headers.get("Cache-Control"), "no-cache", path)
+        # Media and the API are not source files: their caching is left alone,
+        # so a big media grid is not re-validated thumbnail by thumbnail.
+        response = await self.client.get("/h3studio/status")
+        self.assertIsNone(response.headers.get("Cache-Control"))
+
     async def test_shell_and_health(self) -> None:
         response = await self.client.get("/")
         self.assertEqual(response.status, 200)

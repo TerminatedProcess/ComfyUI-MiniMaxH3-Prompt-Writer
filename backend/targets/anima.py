@@ -14,6 +14,8 @@ hash-pinned. Two things make Anima unlike every other target here:
 from __future__ import annotations
 
 import re
+
+from .. import heat as heat_levels
 from typing import Any
 
 from .base import Mode, Target, shared_checks, strip_fence
@@ -86,13 +88,18 @@ MIN_TAGS = 6
 RECOMMENDED_NEGATIVES = ("worst quality", "low quality")
 
 
-def system_prompt(mode: str, *, nsfw: bool = True, story: bool = True, variant: str | None = None) -> str:
+def system_prompt(
+    mode: str, *, nsfw: bool = True, story: bool = True, variant: str | None = None, heat: int | None = None,
+) -> str:
     resolved = variant if variant in VARIANTS else "turbo"
+    level = heat_levels.resolve(heat=heat, nsfw=nsfw)
     parts = [
         BASE_CONTRACT,
         VARIANT_CLAUSES[resolved],
         STORY_CLAUSE if story else FAITHFUL_CLAUSE,
-        NSFW_CLAUSE if nsfw else SAFE_CLAUSE,
+        # The tag vocabulary is Anima's own; the level says how far to take it,
+        # and level 0 is the shipped safe-tag rule untouched.
+        *((SAFE_CLAUSE,) if level == heat_levels.CLEAN else (NSFW_CLAUSE, heat_levels.clause(level))),
     ]
     return " ".join(parts)
 

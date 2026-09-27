@@ -170,6 +170,70 @@ class LockTests(unittest.TestCase):
         prose = "an adult male in his late 30s in a denim jacket looks out of the window"
         self.assertEqual(generic.lock_violations(doc, prose), ("subject",))
 
+    def test_a_tense_change_is_not_a_dropped_fact(self):
+        """The reported bug, twice over on one compile.
+
+        The document is written in sentence case, so "Taking" was read as a
+        proper noun -- and names are all-or-nothing, so a compile saying "to
+        take a selfie" failed the field outright. The surviving words then
+        scored 0.58 against the 0.6 bar purely on verb endings.
+        """
+        doc = doc_with(action=(
+            "Taking a selfie with her arm extended toward the camera, tilting her head slightly "
+            "while holding the pose",
+            generic.ORIGIN_USER,
+        ))
+        prose = (
+            "A woman tilts her head slightly while smiling, as she extends her right arm toward "
+            "the camera to take a selfie."
+        )
+        self.assertEqual(generic.lock_violations(doc, prose), ())
+
+    def test_that_fact_genuinely_dropped_is_still_caught(self):
+        doc = doc_with(action=(
+            "Taking a selfie with her arm extended toward the camera, tilting her head slightly",
+            generic.ORIGIN_USER,
+        ))
+        prose = "A woman gazes out of the window, her hands folded in her lap."
+        self.assertEqual(generic.lock_violations(doc, prose), ("action",))
+
+    def test_a_two_person_relation_survives_an_ordinary_rewording(self):
+        """"Person 1 sitting on the couch, person 2 lying across person 1's lap".
+
+        Every word that failed here was an artefact, not a dropped fact: the
+        possessive "1's" is a token no prose can contain, "sitting" stems to
+        "sitt" against "sits", "lying" to nothing against "lies", and the "Two"
+        that opens "Two women:" was read as a name that had to survive whole.
+        """
+        doc = doc_with(
+            pose=("Person 1 sitting on the couch, person 2 lying across person 1's lap", generic.ORIGIN_USER),
+            subject=("Two women: a blonde in a red dress and a brunette in jeans", generic.ORIGIN_USER),
+        )
+        prose = "A blonde in a red dress sits on the couch; a brunette in jeans lies across her lap."
+        self.assertEqual(generic.lock_violations(doc, prose), ())
+
+    def test_losing_the_relation_between_two_people_is_still_caught(self):
+        doc = doc_with(
+            pose=("Person 1 sitting on the couch, person 2 lying across person 1's lap", generic.ORIGIN_USER),
+        )
+        self.assertEqual(
+            generic.lock_violations(doc, "A blonde and a brunette sit together on the couch."),
+            ("pose",),
+        )
+
+    def test_a_swap_between_two_people_is_NOT_caught(self):
+        """Documented, not accidental: the audit is bag-of-words.
+
+        Swapping which woman wears the red dress changes the picture and keeps
+        every token, so nothing here can see it. Binding attributes to people
+        needs per-person fields, not a better ratio.
+        """
+        doc = doc_with(
+            subject=("Two women: a blonde in a red dress and a brunette in jeans", generic.ORIGIN_USER),
+        )
+        swapped = "A brunette in a red dress and a blonde in jeans."
+        self.assertEqual(generic.lock_violations(doc, swapped), ())
+
     def test_expected_values_are_quoted_for_the_repair_turn(self):
         doc = doc_with(wardrobe=("a red pleated skirt", generic.ORIGIN_ASSET))
         self.assertEqual(

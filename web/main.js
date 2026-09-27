@@ -1,13 +1,13 @@
 import { createDesktopNotifications } from "./desktop_notifications.js";
 import { promptHighlightMarkup } from "./prompt_highlights.js";
-import { generationButtonMarkup, sequenceNotificationOptions, aspectRatioMarkup, bindAspectRatio, splitMenuMarkup, setSplitMenuOpen, copyButtonMarkup } from "./writer_controls.js";
+import { generationButtonMarkup, sequenceNotificationOptions, aspectRatioMarkup, bindAspectRatio, splitMenuMarkup, setSplitMenuOpen, fieldCopyButtonMarkup } from "./writer_controls.js";
 import { mediaVisualDescriptor } from "./media_visual.js";
 import { createSequenceWorkspace } from "./sequence_workspace.js";
 import { createWriterStage } from "./writer_stage.js";
 import { createMediaZoom } from "./media_zoom.js";
 import { generateSequence, cancelSequence } from "./api/sequence.js";
 import { app } from "/scripts/app.js";
-import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, unloadModel, uploadMedia } from "./api/h3studio.js";
+import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getMediaManifest, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, unloadModel, uploadMedia } from "./api/h3studio.js";
 import { comfyVramIsAlreadyEmpty, createSessionId, fileCountFromDataTransfer, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replacementTargetForFileDrop, replaceEventListener, vramReleaseReachedTarget } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
@@ -18,6 +18,7 @@ import {
   clearPromptDraft,
   createStudioState,
   isGenerationModeAvailable,
+  MAX_REPAIR_ATTEMPTS,
   isPersistedDraftMode,
   isTextOnlyDirectModel,
   DEFAULT_OLLAMA_HOST,
@@ -53,6 +54,10 @@ const MUSIC3_GUIDE_URL = "https://github.com/MiniMax-AI/MiniMax-Music3/tree/main
 // Media belongs to the writing session, not to one mode: attach a picture once
 // and every target on the right can be compiled from it.
 const SESSION_MEDIA_MODE = "Reference";
+// How long a picture's click waits to see whether a second one is coming. Short
+// enough not to feel like lag when opening the editor, long enough for a normal
+// double-click (browsers themselves accept up to ~500ms, which would feel slow).
+const DOUBLE_CLICK_MS = 220;
 
 /** Which mode's media zone a given generation mode should show.
 
@@ -234,6 +239,10 @@ function formatGenerationMeta(result) {
   const media = Number(result.media_processing_seconds || 0).toFixed(1);
   const llm = Number(result.generation_seconds || 0).toFixed(1);
   const fallback = result.thinking_fallback ? " · Thinking fallback" : "";
+  // A repair that worked needs recording, not announcing: it belongs beside the
+  // other measurements of the run, where it is there when you go looking and
+  // silent when you are not.
+  const repaired = result.format_repair_applied ? " · auto-corrected" : "";
   const memory = result.context_tokens ? ` · ${Math.round(result.context_tokens / 1024)}K/${String(result.kv_cache).toUpperCase()}` : "";
   const timing = result.api_provider
     ? `${result.total_seconds.toFixed(1)}s total (${media}s media · ${llm}s provider)`
@@ -244,7 +253,7 @@ function formatGenerationMeta(result) {
   const apiRequests = result.api_provider ? ` · ${result.provider_request_count || 1} API request${result.provider_request_count === 1 ? "" : "s"}` : "";
   const cost = Number.isFinite(result.provider_cost_usd) ? ` · $${result.provider_cost_usd.toFixed(4)} reported` : "";
   const usage = result.api_provider && result.usage_source ? ` · usage ${result.usage_source}` : "";
-  return `${promptLengthMeta(result.prompt)} · ${timing}${speed}${apiRequests}${cost}${usage}${peakVram}${memory}${fallback}`;
+  return `${promptLengthMeta(result.prompt)} · ${timing}${speed}${apiRequests}${cost}${usage}${peakVram}${memory}${fallback}${repaired}`;
 }
 
 function syncOutputLengthMeta() {
@@ -413,6 +422,7 @@ function icon(name, size = 16) {
     audio: '<path d="M4 12h2m2-4v8m4-12v16m4-13v10m4-7v4"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     chevron: '<path d="m9 18 6-6-6-6"/>',
+    arrowRight: '<path d="M4 12h15m-6-6 6 6-6 6"/>',
     copy: '<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
     play: '<path d="m9 7 8 5-8 5V7Z" fill="currentColor" stroke="none"/>',
     pause: '<path d="M8 6v12M16 6v12" stroke-width="3"/>',
@@ -431,6 +441,22 @@ function icon(name, size = 16) {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" style="--h3ps-icon-size:${size}px" aria-hidden="true">${paths[name] || paths.info}</svg>`;
 }
 
+/** Whether double-clicking this card writes the brief from it.
+ *
+ *  Pictures only, and only in the writer stage: Music 3's brief is about sound,
+ *  and without the stage there is no session brief to write into. */
+function canDescribeAsset(asset) {
+  return Boolean(asset && asset.type === "image" && studio.stage && studio.mode !== "Music3");
+}
+
+function describeAssetIntoBrief(asset) {
+  if (!canDescribeAsset(asset) || studio.requestBusy || studio.stage.busy()) return;
+  // Reading the picture IS the request here, so a text-only model cannot do it
+  // at all -- say so rather than letting the model call fail mid-flight.
+  if (!generationModeIsAvailable()) return;
+  studio.stage.describe(asset.id);
+}
+
 function renderAsset(asset, index) {
   const destructiveDisabled = studio.requestBusy ? "disabled" : "";
   const tagDisabled = studio.requestBusy ? "disabled" : "";
@@ -442,14 +468,17 @@ function renderAsset(asset, index) {
       : `<div class="h3ps-thumb-art h3ps-tone-${asset.tone || "blue"}"><span></span></div>`;
   const overlay = asset.type === "video" ? `<span class="h3ps-play">${icon("play", 18)}</span>` : "";
   const duration = formatDuration(asset.duration);
+  // The double-click is invisible otherwise, and the card has no room to say it.
+  const hint = canDescribeAsset(asset) ? ` title="Click to edit · Double-click to write the Creative brief from this picture"` : "";
   return `
-    <div class="h3ps-asset" tabindex="0" role="group" aria-label="Media inspector" draggable="${draggable}" data-asset-index="${index}" data-asset-id="${asset.id}" data-replace-label="Replace ${escapeHtml(asset.reference || asset.filename)}">
+    <div class="h3ps-asset"${hint} tabindex="0" role="group" aria-label="Media inspector" draggable="${draggable}" data-asset-index="${index}" data-asset-id="${asset.id}" data-replace-label="Replace ${escapeHtml(asset.reference || asset.filename)}">
       <span class="h3ps-asset-preview h3ps-${asset.type}">${visual}${overlay}</span>
       <span class="h3ps-asset-copy">
         <strong>${asset.reference ? `<button type="button" class="h3ps-media-tag is-${asset.type}" data-media-tag="${escapeHtml(asset.reference)}" ${tagDisabled} title="Insert reference at text cursor">${escapeHtml(asset.reference || asset.filename)}</button>` : "Trim required"}</strong>
         <small>${escapeHtml(asset.filename)}</small>
       </span>
       ${duration ? `<span class="h3ps-duration">${duration}</span>` : ""}
+      ${canDescribeAsset(asset) ? `<button class="h3ps-describe-asset" type="button" data-describe-asset="${asset.id}" title="Write the Creative brief from this picture" aria-label="Write the Creative brief from this picture" ${destructiveDisabled}>${icon("arrowRight", 12)}</button>` : ""}
       <button class="h3ps-replace-asset" type="button" data-replace-asset="${asset.id}" title="Replace ${escapeHtml(asset.reference || asset.filename)}" aria-label="Replace ${escapeHtml(asset.reference || asset.filename)}" ${destructiveDisabled}>${icon("refresh", 12)}</button>
       <button class="h3ps-remove-asset" type="button" data-remove-asset="${asset.id}" title="Remove ${escapeHtml(asset.reference || asset.filename)}" aria-label="Remove ${escapeHtml(asset.reference || asset.filename)}" ${destructiveDisabled}>${icon("close", 12)}</button>
     </div>`;
@@ -520,6 +549,9 @@ function notifyMediaCompatibility() {
 
 function renderMedia(mode) {
   mode = mediaModeFor(mode);
+  // The cards are about to be replaced, so a pending open would target a card
+  // that no longer exists (or an asset that was just removed).
+  clearTimeout(studio.assetClickTimer);
   studio.floatingMedia?.refresh();
   if (mode === "Music3") {
     studio.root.querySelectorAll("[data-mode]").forEach((button) => button.classList.remove("is-active"));
@@ -639,8 +671,33 @@ function bindMediaActions(mode) {
     button.addEventListener("click", (event) => {
       if (event.target.closest("button")) return;
       const asset = studio.assets.find((item) => item.id === button.dataset.assetId);
+      // A picture answers to both clicks: one opens the editor, two write the
+      // brief from it. So the editor waits out the double-click window -- opened
+      // immediately, its overlay covers the card and the second click never
+      // arrives here.
+      if (canDescribeAsset(asset)) {
+        clearTimeout(studio.assetClickTimer);
+        studio.assetClickTimer = setTimeout(() => {
+          if (!studio.requestBusy) studio.mediaEditor.open(asset, button);
+        }, DOUBLE_CLICK_MS);
+        return;
+      }
       if(asset.type === "image" || asset.type === "video"){if(!studio.requestBusy)studio.mediaEditor.open(asset,button);}
       else previewAsset(asset);
+    });
+    button.addEventListener("dblclick", (event) => {
+      if (event.target.closest("button")) return;
+      clearTimeout(studio.assetClickTimer);
+      const asset = studio.assets.find((item) => item.id === button.dataset.assetId);
+      if (!canDescribeAsset(asset)) return;
+      describeAssetIntoBrief(asset);
+    });
+  });
+  studio.root.querySelectorAll("[data-describe-asset]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      clearTimeout(studio.assetClickTimer);
+      describeAssetIntoBrief(studio.assets.find((item) => item.id === button.dataset.describeAsset));
     });
   });
   studio.root.querySelectorAll("[data-replace-asset]").forEach((button) => {
@@ -788,6 +845,26 @@ async function uploadFiles(mode, files, replaceAssetId = null) {
   }
 }
 
+/** The repair that already succeeded, for the toast's Technical details. */
+function repairAppliedDetail(result) {
+  const method = result.format_repair_multimodal
+    ? "the uploaded references were read again"
+    : `${result.format_repair_method}, without re-uploading media`;
+  const tokens = result.format_repair_tokens ? ` (+${result.format_repair_tokens} tokens)` : "";
+  return `Auto-corrected: ${method}${tokens}.\n\nFirst draft: ${result.format_repair_reason}`;
+}
+
+/** What the audit actually objected to, in a few words. */
+function auditFailureSummary(audit) {
+  const dropped = (audit?.lock_violations || []).length;
+  const unmet = (audit?.goals || []).filter((goal) => goal.enabled && goal.verdict === "unmet").length;
+  const parts = [
+    dropped ? `${dropped} established fact${dropped > 1 ? "s" : ""} missing` : null,
+    unmet ? `${unmet} goal${unmet > 1 ? "s" : ""} unmet` : null,
+  ].filter(Boolean);
+  return parts.join(" · ") || "the audit refused it";
+}
+
 function showToast(title, message, details = null, action = null, options = {}) {
   const toast = studio.root.querySelector("[data-h3ps-toast]");
   const durationMs = Number.isFinite(options.durationMs) ? options.durationMs : null;
@@ -869,7 +946,7 @@ function setClearMenuOpen(open) {
   setSplitMenuOpen(studio.root.querySelector("[data-clear-control]"), open);
 }
 
-function clearCurrentPrompts({ notify = true } = {}) {
+function clearCurrentPrompts({ notify = true, stage = true } = {}) {
   if (!studio || studio.requestBusy) return false;
   const draft = clearPromptDraft(currentDraftFields());
   const output = studio.root.querySelector("[data-output]");
@@ -887,9 +964,12 @@ function clearCurrentPrompts({ notify = true } = {}) {
   syncModifiedState();
 
   saveCurrentModeDraft();
-  // The generic prompt and the compiled prompts live in the session, so clearing
-  // the editor alone left the actual prompt standing.
-  if (studio.stage && studio.mode !== "Music3") {
+  // The brief, the generic prompt and the compiled prompts live in the session,
+  // so clearing the editor alone left the actual prompt standing -- and the next
+  // render put the brief straight back. `stage: false` is for a caller that is
+  // about to run the wider "all" reset itself: the stage takes one request at a
+  // time, so a prompts reset started here would swallow it.
+  if (stage && studio.stage && studio.mode !== "Music3") {
     studio.stage.clear({ scope: "prompts", clearMedia: false, confirm: false, notify }).catch(() => {});
     return true;
   }
@@ -919,16 +999,21 @@ async function clearCurrentMedia({ notify = true } = {}) {
 }
 
 async function clearEverything() {
-  const mode = studio.mode;
-  const submittedDraft = currentDraftFields();
+  const stage = studio.stage && studio.mode !== "Music3";
+  // Prompts first, and synchronously. This used to snapshot the boxes, await the
+  // media clear, and abandon everything if they had changed meanwhile -- but the
+  // stage writes to those boxes during exactly that window (an empty brief is
+  // refilled from the session, a stored compiled prompt is restored), so Clear
+  // all cleared the media and then announced that it had kept your prompts.
+  // With nothing awaited before the clear there is no window to lose.
+  clearCurrentPrompts({ notify: false, stage: false });
+  // A failed media clear reports itself; the session reset would fail the same
+  // way (both refuse while a generation is running), so stop here.
   if (!await clearCurrentMedia({ notify: false })) return;
-  const currentDraft = currentDraftFields();
-  if (studio.mode !== mode || currentDraft.brief !== submittedDraft.brief || currentDraft.prompt !== submittedDraft.prompt) {
-    showToast("Media cleared", "Your current prompts were kept because the workspace changed.");
-    return;
-  }
-  clearCurrentPrompts({ notify: false });
-  if (studio.stage && studio.mode !== "Music3") {
+  // NOT guarded on the mode: removing the media re-infers it (I2VA becomes
+  // T2VA with nothing attached), so the clear kept tripping over its own side
+  // effect and skipped the session reset that is the whole point.
+  if (stage) {
     // Clear all is the whole session: document, goals, conversation, outputs.
     await studio.stage.clear({ scope: "all", clearMedia: true, confirm: false, notify: false }).catch(() => {});
     showToast("Everything cleared", "Media, brief, generic prompt, goals, conversation and compiled prompts were removed.");
@@ -1036,7 +1121,11 @@ function syncWorkspace() {
   studio.root.querySelector("[data-output-label]").textContent = outputLabel;
   studio.root.querySelector("[data-output-mobile-label]").textContent = outputLabel;
   studio.root.querySelector("[data-output]").setAttribute("aria-label", outputLabel);
-  studio.root.querySelector("[data-copy-label]").textContent = music ? "Copy caption" : "Copy prompt";
+  // Copy is an icon everywhere now, so what used to be its visible label is its
+  // tooltip and its accessible name.
+  const copyLabel = studio.root.querySelector("[data-copy-label]");
+  copyLabel.title = music ? "Copy caption" : "Copy prompt";
+  copyLabel.setAttribute("aria-label", copyLabel.title);
   studio.root.querySelector("[data-generate-label]").textContent = music ? "Generate caption" : "Generate prompt";
   studio.root.querySelector("[data-refine-media-note]").textContent = music ? "Lyrics stay separate" : "No media re-upload";
   studio.root.querySelector("[data-refine-title]").textContent = music ? "Refine caption" : "Refine prompt";
@@ -1483,26 +1572,40 @@ async function startGenerationPreview() {
     renderPromptHighlights();
     studio.lastModelMeta = formatGenerationMeta(result);
     syncRuntimeSummary(result);
-    studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
+    const meta = studio.root.querySelector(".h3ps-editor-meta span:last-child");
+    meta.textContent = studio.lastModelMeta;
+    // Hovering "auto-corrected" says what was corrected. Nothing pops up to say it.
+    if (result.format_repair_applied) meta.title = repairAppliedDetail(result);
+    else meta.removeAttribute("title");
     syncModifiedState();
     saveCurrentModeDraft();
     studio.refineRestore = null;
     studio.root.querySelector("[data-refine-restore]").hidden = true;
     if (result.thinking_fallback) {
       showToast("Prompt completed", thinkingFallbackMessage(result, "final prompt"), null, null, { dismissOnWorkspaceClick: true });
-    } else if (result.format_repair_applied) {
-      const repairDetail = result.format_repair_multimodal
-        ? "the existing uploaded references were checked again and the prompt was corrected"
-        : `${result.format_repair_method} corrected it without re-uploading media`;
-      showToast("Prompt generated", `The first draft failed ${result.format_repair_reason}; ${repairDetail}.`, null, null, { dismissOnWorkspaceClick: true });
     } else if (result.format_repair_failure) {
-      showToast("Prompt generated with a format warning", `The first draft failed ${result.format_repair_reason}; the safe repair was rejected because ${result.format_repair_failure}.`, null, null, { dismissOnWorkspaceClick: true });
+      // The only outcome with a decision in it: both drafts failed the audit, the
+      // repair was discarded, and this is the unrepaired first draft. So it stays
+      // loud, and it offers the action instead of describing one. The full
+      // failure text -- which said the same thing twice -- is in the details.
+      showToast(
+        "Prompt generated with a warning",
+        `The repair was rejected (${auditFailureSummary(result.prompt_audit)}), so this is the first draft — see the goals panel.`,
+        `First draft: ${result.format_repair_reason}\n\nRepair: ${result.format_repair_failure}`,
+        { label: "Generate again", onClick: () => startGenerationPreview() },
+        { dismissOnWorkspaceClick: true },
+      );
     } else {
       const details = [
         `${result.total_seconds.toFixed(1)}s`,
         `${result.tokens_per_second.toFixed(1)} tok/s`,
         result.api_provider ? "Reasoning provider managed" : external ? null : `Thinking ${result.thinking ? "on" : "off"}`,
       ];
+      // A repair that WORKED gets no toast of its own: the fault was found and
+      // fixed before this text existed, so there is nothing to act on, and it
+      // used to arrive at the same volume as a real problem. It is recorded in
+      // the meta line under the prompt instead -- "· auto-corrected", hover for
+      // what was corrected.
       showToast(studio.mode === "Music3" ? "Caption generated" : "Prompt generated", details.filter(Boolean).join(" · "));
     }
     studio.stage?.afterCompile(result, studio.mode).catch(() => {});
@@ -2964,7 +3067,7 @@ function musicSystemPromptPanelMarkup(profile, label, description, hidden = fals
       </header>
       <p>${description}</p>
       <textarea data-system-prompt="${profile}" maxlength="8000" spellcheck="true" disabled></textarea>
-      <footer><small data-system-prompt-count="${profile}">0 / 8,000</small><button type="button" data-system-prompt-reset="${profile}" hidden>Restore default</button></footer>
+      <footer><small data-system-prompt-count="${profile}">0 / 8,000</small>${fieldCopyButtonMarkup(icon, `[data-system-prompt=${profile}]`, "Copy system prompt")}<button type="button" data-system-prompt-reset="${profile}" hidden>Restore default</button></footer>
     </div>`;
 }
 
@@ -3125,7 +3228,7 @@ function createStudio() {
           </div>
 
           <label class="h3ps-brief">
-            <span><strong>Creative brief</strong><small>Describe what should happen in the video</small></span>
+            <span><strong>Creative brief</strong><small>Describe what should happen in the video</small>${fieldCopyButtonMarkup(icon, "[data-video-brief]", "Copy brief")}</span>
             <textarea spellcheck="true" maxlength="8000" placeholder="e.g. At blue hour a bicycle courier arrives at a rooftop greenhouse, sets down a glowing parcel and watches the city lights come on." data-video-brief></textarea>
             <small class="h3ps-char-count">0 / 8,000</small>
           </label>
@@ -3133,12 +3236,12 @@ function createStudio() {
 
           <div class="h3ps-music-inputs" data-music-inputs hidden>
             <label class="h3ps-brief">
-              <span><strong>Music brief</strong><small>Describe the sound, vocals, mood, arrangement or production</small></span>
+              <span><strong>Music brief</strong><small>Describe the sound, vocals, mood, arrangement or production</small>${fieldCopyButtonMarkup(icon, "[data-music-brief]", "Copy brief")}</span>
               <textarea spellcheck="true" maxlength="2000" data-music-brief>${MUSIC3_DEFAULT_DRAFT.brief}</textarea>
               <small class="h3ps-char-count">0 / 2,000</small>
             </label>
             <label class="h3ps-brief h3ps-lyrics">
-              <span><strong>Lyrics</strong><small>Optional</small></span>
+              <span><strong>Lyrics</strong><small>Optional</small>${fieldCopyButtonMarkup(icon, "[data-music-lyrics]", "Copy lyrics")}</span>
               <textarea spellcheck="true" maxlength="4000" data-music-lyrics placeholder="[Verse 1]&#10;...&#10;&#10;[Chorus]&#10;..."></textarea>
               <small class="h3ps-char-count">0 / 4,000</small>
             </label>
@@ -3190,6 +3293,8 @@ function createStudio() {
           <div class="h3ps-editor-wrap">
             <div class="h3ps-editor-highlight" data-prompt-highlights aria-hidden="true"></div>
             <textarea class="h3ps-editor" aria-label="Generated prompt" spellcheck="false" placeholder="The compiled prompt for the model you pick appears here." data-output></textarea>
+            <button class="h3ps-icon-button h3ps-field-copy h3ps-editor-copy" type="button" data-copy data-copy-label
+                    title="Copy prompt" aria-label="Copy prompt">${icon("copy", 14)}</button>
             <div class="h3ps-reference-peek" data-reference-peek hidden></div>
             <div class="h3ps-editor-meta"><span>${promptLengthMeta("")}</span></div>
           </div>
@@ -3208,7 +3313,6 @@ function createStudio() {
             <span class="h3ps-output-primary-actions">
               <button class="h3ps-secondary-button" type="button" title="Refine with local LLM" data-refine-toggle>${icon("spark", 15)} Refine</button>
             </span>
-            ${copyButtonMarkup(icon, "data-copy", '<span data-copy-label>Copy prompt</span>')}
           </div>
         </section>
       </div>
@@ -3704,6 +3808,20 @@ function createStudio() {
     showToast("Edits undone", "Restored the latest AI-generated prompt.");
   });
   root.querySelector("[data-copy]").addEventListener("click", () => copyPromptText(root.querySelector("[data-output]").value, studio.mode === "Music3"));
+  // Every field holding prompt text copies the same way -- briefs, lyrics,
+  // system prompts, sequence instructions -- so only the selector and the toast
+  // title differ. Delegated, because several of them are rendered on demand.
+  root.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-copy-field]");
+    if (!button) return;
+    // These sit inside <label>s; without this the click also focuses the field.
+    event.preventDefault();
+    const field = root.querySelector(button.dataset.copyField);
+    const title = button.dataset.copyTitle || "Copied";
+    if (!field) return;
+    if (!field.value.trim()) { showToast(title, "There is nothing in it yet."); return; }
+    copyPromptText(field.value, false, title);
+  });
   root.querySelector("[data-output]").addEventListener("input", () => {
     syncModifiedState();
     renderPromptHighlights();
@@ -3800,6 +3918,12 @@ function createStudio() {
     },
     inferredModeSummary: () => inferredModeSummary(),
     compile: () => startGenerationPreview(),
+    repairAttempts: () => studio.repairAttempts,
+    maxRepairAttempts: () => MAX_REPAIR_ATTEMPTS,
+    setRepairAttempts: (count) => {
+      studio.repairAttempts = Math.max(0, Math.min(MAX_REPAIR_ATTEMPTS, Number(count) || 0));
+      saveUserPreferences(localStorage, studio);
+    },
     setStatus: (label) => setGenerationState("busy", label, studio.selectedModel?.name?.split("/").pop() || ""),
     clearStatus: () => setGenerationState("idle"),
     notify: (title, message) => showToast(title, message, null, null, { dismissOnWorkspaceClick: true }),
@@ -3866,6 +3990,7 @@ function createStudio() {
   syncSystemPromptEditors();
   setMusicSystemPromptProfile(studio.musicSystemPromptProfile);
   refreshModels();
+  restoreSessionMedia();
   studio.stage.start().catch((error) => {
     // The stage is the whole two-pane flow; if it cannot load, say so rather
     // than leaving the panes half-rendered and silent.
@@ -3874,6 +3999,29 @@ function createStudio() {
     showToast("Writer stage unavailable", error.message || String(error));
   });
   return studio;
+}
+
+/** Put the session's media back on screen after a reload.
+ *
+ *  The files live on the server under the session id, and the brief, the
+ *  document and the goals all come back on a refresh -- but the cards did not,
+ *  so a reload looked like the media had been thrown away, and the next build
+ *  silently ran against references the user could no longer see.
+ *
+ *  Uploads that land while this is in flight win: they are the newer truth. */
+async function restoreSessionMedia() {
+  const sessionId = studio.sessionId;
+  try {
+    const manifest = await getMediaManifest(sessionId, SESSION_MEDIA_MODE);
+    if (!studio || studio.sessionId !== sessionId || studio.assets.length) return;
+    studio.assets = manifest.assets || [];
+    if (!studio.assets.length) return;
+    renderMedia(studio.mode);
+    studio.stage?.mediaChanged();
+    syncModeAvailability();
+  } catch {
+    // Nothing to say: the studio simply opens with no cards, exactly as before.
+  }
 }
 
 /** H3's mode in plain English, from what is attached. Never shown as jargon. */

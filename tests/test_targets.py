@@ -10,6 +10,7 @@ import unittest
 
 from backend import targets
 from backend.guides import GUIDES, load_guide
+from backend import heat
 from backend.system_prompts import (
     MUSIC3_LYRICS_SYSTEM_WRAPPER,
     MUSIC3_SYSTEM_WRAPPER,
@@ -99,18 +100,36 @@ class FlagCompositionTests(unittest.TestCase):
         self.assertIn("Preserve the source motion order.", loose)
         self.assertNotIn("but do not invent unsupported subject actions", loose)
 
-    def test_naughty_adds_permission_without_removing_anything(self):
-        base = system_prompt_for_mode("T2VA")
-        naughty = system_prompt_for_mode("T2VA", nsfw=True)
-        self.assertTrue(naughty.startswith(base))
-        self.assertIn("Adult, explicit or otherwise mature content is permitted", naughty)
+    def test_the_heat_dial_only_ever_adds_to_the_shipped_contract(self):
+        """A boolean could not say how far to go; the dial says it in one place.
 
-    def test_krea_naughty_swaps_the_upstream_dignity_clause(self):
-        polite = system_prompt_for_mode("Krea2")
-        naughty = system_prompt_for_mode("Krea2", nsfw=True)
+        Level 0 is the vendored wrapper untouched -- these contracts ship with
+        the guides and must stay byte-for-byte at the bottom of the dial.
+        """
+        base = system_prompt_for_mode("T2VA")
+        self.assertEqual(system_prompt_for_mode("T2VA", heat=heat.CLEAN), base)
+        for level in (heat.ALLOWED, heat.SENSUAL, heat.EXPLICIT, heat.GRAPHIC):
+            composed = system_prompt_for_mode("T2VA", heat=level)
+            self.assertTrue(composed.startswith(base), heat.label(level))
+            self.assertIn(heat.clause(level), composed, heat.label(level))
+
+    def test_each_level_says_something_different(self):
+        wordings = {system_prompt_for_mode("Krea2", heat=level) for level in heat.LEVELS}
+        self.assertEqual(len(wordings), len(heat.LEVELS))
+        self.assertIn("permitted where the user asks for it", system_prompt_for_mode("Krea2", heat=heat.ALLOWED))
+        self.assertIn("pornographic prose", system_prompt_for_mode("Krea2", heat=heat.GRAPHIC))
+
+    def test_krea_keeps_its_dignity_clause_only_at_the_bottom_of_the_dial(self):
+        polite = system_prompt_for_mode("Krea2", heat=heat.CLEAN)
         self.assertIn("assume clothing covers genitals", polite)
-        self.assertNotIn("assume clothing covers genitals", naughty)
-        self.assertIn("Adult or explicit content is permitted", naughty)
+        self.assertEqual(system_prompt_for_mode("Krea2"), polite, "flags off is still the shipped wording")
+        for level in (heat.ALLOWED, heat.SENSUAL, heat.EXPLICIT, heat.GRAPHIC):
+            self.assertNotIn("assume clothing covers genitals", system_prompt_for_mode("Krea2", heat=level))
+
+    def test_the_old_boolean_still_moves_the_dial(self):
+        """Older clients and stored sessions send nsfw, not heat."""
+        self.assertEqual(system_prompt_for_mode("Krea2", nsfw=False), system_prompt_for_mode("Krea2", heat=heat.CLEAN))
+        self.assertEqual(system_prompt_for_mode("Krea2", nsfw=True), system_prompt_for_mode("Krea2", heat=heat.DEFAULT))
 
     def test_anima_variant_drives_the_score_tag_rule(self):
         aesthetic = system_prompt_for_mode("Anima", variant="aesthetic")

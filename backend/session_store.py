@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from . import generic, goals as goal_ledger
+from . import generic, heat as heat_levels, goals as goal_ledger
 
 SCHEMA = "session/1"
 STATE_ROOT = Path(__file__).resolve().parent.parent / "data" / "sessions"
@@ -62,6 +62,9 @@ def new_state(session_id: str) -> dict[str, Any]:
             "duration_seconds": 10,
             "aspect_ratio": "16:9",
             "nsfw": True,
+            # How far the writer goes, 0 clean .. 4 graphic. `nsfw` is kept as
+            # its derived shadow so anything still reading the boolean works.
+            "heat": heat_levels.DEFAULT,
             "story": True,
         },
         "generic": generic.new_doc(),
@@ -84,7 +87,8 @@ def _normalized(raw: Any, session_id: str) -> dict[str, Any]:
             if key in inputs:
                 merged[key] = inputs[key]
         merged["brief"] = str(merged.get("brief") or "")[:8000]
-        merged["nsfw"] = bool(merged.get("nsfw", True))
+        merged["heat"] = heat_levels.resolve(heat=merged.get("heat"), nsfw=merged.get("nsfw"))
+        merged["nsfw"] = heat_levels.permits_adult(merged["heat"])
         merged["story"] = bool(merged.get("story", True))
         state["inputs"] = merged
     try:
@@ -103,8 +107,8 @@ def _normalized(raw: Any, session_id: str) -> dict[str, Any]:
             {
                 "role": "assistant" if turn.get("role") == "assistant" else "user",
                 "text": str(turn.get("text") or "")[:MAX_MESSAGE_CHARS],
-                "changed": [key for key in (turn.get("changed") or []) if key in generic.FIELDS],
-                "protected": [key for key in (turn.get("protected") or []) if key in generic.FIELDS],
+                "changed": [key for key in (turn.get("changed") or []) if generic.is_field(key)],
+                "protected": [key for key in (turn.get("protected") or []) if generic.is_field(key)],
                 "goals_added": [str(item)[:MAX_GOAL_TEXT] for item in (turn.get("goals_added") or [])],
                 "at": turn.get("at"),
             }
@@ -272,10 +276,15 @@ def public(state: dict[str, Any], *, attached: list[dict[str, Any]] | None = Non
     snapshot = state.get("media_snapshot") or []
     return {
         **state,
+        # Derived from THIS document, not from the constant: a second person adds
+        # keys, and the studio builds its rows from what it is sent.
         "fields": generic.records(state.get("generic") or generic.new_doc()),
-        "field_order": list(generic.FIELDS),
-        "labels": dict(generic.LABELS),
-        "groups": [{"title": title, "fields": list(keys)} for title, keys in generic.GROUPS],
+        "field_order": list(generic.doc_fields(state.get("generic") or generic.new_doc())),
+        "labels": generic.doc_labels(state.get("generic") or generic.new_doc()),
+        "groups": [
+            {"title": title, "fields": list(keys)}
+            for title, keys in generic.doc_groups(state.get("generic") or generic.new_doc())
+        ],
         "unspecified": list(generic.unspecified_fields(state.get("generic") or generic.new_doc())),
         "media_missing": [item for item in snapshot if item.get("id") not in loaded_ids],
     }

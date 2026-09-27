@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from . import generic as generic_prompt
+from . import generic as generic_prompt, heat as heat_levels
 from . import goals as goal_ledger
 from .guides import MODE_GUIDES, guide_for_mode, load_guide, reference_base_excerpt
 from .scene_bible import (
@@ -42,7 +42,12 @@ def _flags(body: dict[str, Any], mode: str) -> dict[str, Any]:
     for key in ("nsfw", "story"):
         if key in body and not isinstance(body[key], bool):
             raise AssemblyError("INVALID_REQUEST", f"{key} must be a boolean.", {"field": key})
-    nsfw = bool(body.get("nsfw", True)) if target.declares("nsfw") else False
+    if "heat" in body and (isinstance(body["heat"], bool) or not isinstance(body["heat"], int)):
+        raise AssemblyError("INVALID_REQUEST", "heat must be a whole number.", {"field": "heat"})
+    # One dial, resolved once: the boolean is kept as its derived shadow for
+    # everything that still reads `nsfw`.
+    level = heat_levels.resolve(heat=body.get("heat"), nsfw=body.get("nsfw")) if target.declares("nsfw") else heat_levels.CLEAN
+    nsfw = heat_levels.permits_adult(level)
     story = bool(body.get("story", True)) if target.declares("story") else False
     variant = None
     if target.variants:
@@ -56,7 +61,7 @@ def _flags(body: dict[str, Any], mode: str) -> dict[str, Any]:
         variant = requested
     elif body.get("variant"):
         raise AssemblyError("INVALID_VARIANT", f"{target.label} has no variants.", {"field": "variant"})
-    return {"nsfw": nsfw, "story": story, "variant": variant}
+    return {"nsfw": nsfw, "heat": level, "story": story, "variant": variant}
 
 
 def _validated_generic(body: dict[str, Any]) -> dict[str, Any] | None:
@@ -165,7 +170,7 @@ def _effective_system_prompt(
     mode: str,
     flags: dict[str, Any] | None = None,
 ) -> tuple[str, bool]:
-    resolved = flags or {"nsfw": False, "story": False, "variant": None}
+    resolved = flags or {"nsfw": False, "heat": heat_levels.CLEAN, "story": False, "variant": None}
     try:
         return resolve_system_prompt(
             mode,
@@ -173,6 +178,7 @@ def _effective_system_prompt(
             nsfw=bool(resolved.get("nsfw")),
             story=bool(resolved.get("story")),
             variant=resolved.get("variant"),
+            heat=resolved.get("heat"),
         )
     except SystemPromptError as error:
         raise AssemblyError(error.code, error.message) from error

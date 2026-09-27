@@ -29,6 +29,15 @@ const apiStub = `data:text/javascript;base64,${Buffer.from(`
     lastCall = ["expand", body];
     return { session: globalThis.__stageSession, brief: "an expanded brief", previous_brief: body.brief };
   };
+  export const describeAsset = async (body) => {
+    lastCall = ["describe", body];
+    return {
+      session: globalThis.__stageSession,
+      brief: globalThis.__stageDescribed ?? "a described brief",
+      previous_brief: globalThis.__stagePreviousBrief ?? "",
+      described: "a described brief",
+    };
+  };
 `).toString("base64")}`;
 const inferenceStub = `data:text/javascript;base64,${Buffer.from(
   await read("../web/mode_inference.js"),
@@ -288,7 +297,10 @@ test("the stage mounts and renders every panel without an undefined reference", 
     assert.match(html, /Generate Krea 2 prompt/);
     assert.equal(root.querySelectorAll(".h3ps-stage-turn").length, 2);
     assert.equal(root.querySelector("[data-stage-flag=\"story\"]").checked, false);
-    assert.equal(root.querySelector("[data-stage-flag=\"nsfw\"]").checked, true);
+    // Naughty is a five-step dial now, not a switch: a boolean could not say
+    // whether adult content was merely allowed or should be written filthy.
+    assert.equal(root.querySelector("[data-heat]").value, "2");
+    assert.equal(root.querySelector("[data-heat-label]").textContent, "Sensual");
   } finally {
     globalThis.document = previousDocument;
     await window.happyDOM.close();
@@ -439,7 +451,7 @@ test("the switches say what they will do before anything is generated", async ()
     await stageInstance.start();
     const effect = root.querySelector("[data-flag-effect]").textContent;
     assert.match(effect, /gaps stay unspecified/);
-    assert.match(effect, /Adult content is allowed/);
+    assert.match(effect, /Draws out the charge in a scene/, "the dial says what this level does");
     // And the card counts what each switch produced.
     assert.match(root.querySelector("[data-generic-summary]").textContent, /1 invented/);
     assert.match(root.querySelector("[data-generic-summary]").textContent, /not specified/);
@@ -483,6 +495,133 @@ test("Expand brief rewrites the box on demand, and can be undone", async () => {
   }
 });
 
+test("double-clicking a picture writes the brief from it, and can be undone", async () => {
+  const window = new Window();
+  const previousDocument = globalThis.document;
+  globalThis.document = window.document;
+  try {
+    const root = mountRoot(window);
+    globalThis.__stageRegistry = REGISTRY;
+    globalThis.__stageSession = SESSION;
+    globalThis.__stageDescribed = "a described brief";
+    globalThis.__stagePreviousBrief = "";
+    const box = root.querySelector("[data-video-brief]");
+    const notes = [];
+    const stageInstance = stageModule.createWriterStage({
+      ...basicHost(root),
+      assets: () => [{ id: "a1", type: "image", reference: "<Picture 1>", filename: "hero.png" },
+                     { id: "v1", type: "video", filename: "clip.mp4" }],
+      briefValue: () => box.value,
+      briefElement: () => box,
+      notify: (title) => notes.push(title),
+    });
+    await stageInstance.start();
+    const api = await import(apiStub);
+
+    assert.equal(await stageInstance.describe("a1"), true);
+    assert.equal(api.lastCall[0], "describe");
+    assert.equal(api.lastCall[1].asset_id, "a1");
+    assert.equal(box.value, "a described brief");
+    const undo = root.querySelector("[data-brief-undo]");
+    assert.equal(undo.hidden, false);
+    assert.equal(undo.textContent, "Undo description", "the one undo says which rewrite it takes back");
+
+    undo.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(box.value, "", "undo restores what the brief said before the picture was read");
+
+    // Only pictures: a clip has no single frame to describe.
+    assert.equal(await stageInstance.describe("v1"), false);
+    assert.equal(await stageInstance.describe("gone"), false);
+    assert.equal(api.lastCall[0], "inputs", "neither refusal reached the model");
+  } finally {
+    globalThis.__stageDescribed = undefined;
+    globalThis.__stagePreviousBrief = undefined;
+    globalThis.document = previousDocument;
+    await window.happyDOM.close();
+  }
+});
+
+test("every prompt field copies the same way: one icon button, no labelled buttons", () => {
+  // The big "Copy prompt" button read as a primary action next to Refine; the
+  // icon is what the briefs, the lyrics and the system prompts already use.
+  const stageSource = stage;
+  assert.match(main, /data-copy data-copy-label\n\s*title="Copy prompt"/);
+  assert.doesNotMatch(main, /data-copy-label>Copy prompt</, "no visible label on the copy control");
+  assert.match(stageSource, /data-generic-copy[^>]*\n?[^>]*aria-label="Copy the generic prompt"/);
+  assert.match(stageSource, /data-negative-copy[^>]*\n?[^>]*aria-label="Copy the negative prompt"/);
+  assert.doesNotMatch(stageSource, /h3ps-text-button" type="button" data-(negative|generic)-copy/);
+});
+
+test("a repair that worked is recorded, not announced", () => {
+  // It used to arrive as its own toast, at the volume of a real problem, about
+  // work that had already succeeded.
+  assert.match(main, /format_repair_applied \? " · auto-corrected" : ""/);
+  assert.match(main, /meta\.title = repairAppliedDetail\(result\)/);
+  // The rejected repair is the one with a decision in it, so it keeps its toast
+  // and now offers the action.
+  assert.match(main, /label: "Generate again"/);
+});
+
+test("a picture carries its own Write-the-brief control, next to Replace and Remove", () => {
+  // The double-click is invisible; the arrow on the card is the discoverable way.
+  assert.match(main, /data-describe-asset=/);
+  assert.match(main, /querySelectorAll\("\[data-describe-asset\]"\)/);
+});
+
+test("a picture's click waits for the second one before opening the editor", () => {
+  // Opening the editor immediately puts its overlay over the card, so the second
+  // click of a double-click never reaches the card and describe never fires.
+  assert.match(main, /canDescribeAsset\(asset\)/);
+  assert.match(main, /studio\.assetClickTimer = setTimeout/);
+  assert.match(main, /addEventListener\("dblclick"/);
+  assert.match(main, /describeAssetIntoBrief/);
+});
+
+test("every step of the Naughty dial says something different", async () => {
+  const window = new Window();
+  const previousDocument = globalThis.document;
+  globalThis.document = window.document;
+  try {
+    const root = mountRoot(window);
+    globalThis.__stageRegistry = REGISTRY;
+    const seen = new Set();
+    for (const [level, label] of [[0, "Clean"], [1, "Allowed"], [2, "Sensual"], [3, "Explicit"], [4, "Graphic"]]) {
+      globalThis.__stageSession = { ...SESSION, inputs: { ...SESSION.inputs, heat: level } };
+      const stageInstance = stageModule.createWriterStage(basicHost(root));
+      await stageInstance.start();
+      assert.equal(root.querySelector("[data-heat]").value, String(level));
+      assert.equal(root.querySelector("[data-heat-label]").textContent, label);
+      seen.add(root.querySelector("[data-flag-effect]").textContent);
+      root.innerHTML = "";
+      root.append(...mountRoot(window).childNodes);
+    }
+    assert.equal(seen.size, 5, "each level explains itself differently");
+  } finally {
+    globalThis.__stageSession = SESSION;
+    globalThis.document = previousDocument;
+    await window.happyDOM.close();
+  }
+});
+
+test("a session from before the dial still opens at the right level", async () => {
+  const window = new Window();
+  const previousDocument = globalThis.document;
+  globalThis.document = window.document;
+  try {
+    const root = mountRoot(window);
+    globalThis.__stageRegistry = REGISTRY;
+    globalThis.__stageSession = { ...SESSION, inputs: { story: true, nsfw: false } };
+    const stageInstance = stageModule.createWriterStage(basicHost(root));
+    await stageInstance.start();
+    assert.equal(root.querySelector("[data-heat-label]").textContent, "Clean", "Naughty off was the bottom of the dial");
+  } finally {
+    globalThis.__stageSession = SESSION;
+    globalThis.document = previousDocument;
+    await window.happyDOM.close();
+  }
+});
+
 test("clearing prompts reaches the session, not just the editor", () => {
   assert.match(main, /studio\.stage\.clear\(\{ scope: "prompts", clearMedia: false/);
   assert.match(main, /studio\.stage\.clear\(\{ scope: "all", clearMedia: true/);
@@ -490,7 +629,7 @@ test("clearing prompts reaches the session, not just the editor", () => {
 
 test("the stage owns the flags, the build, the conversation and the delivery bar", () => {
   for (const hook of [
-    "data-stage-flag=\"nsfw\"",
+    "data-heat",
     "data-stage-flag=\"story\"",
     "data-stage-build",
     "data-stage-send",

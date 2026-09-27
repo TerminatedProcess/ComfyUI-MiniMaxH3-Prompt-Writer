@@ -45,7 +45,7 @@ MAX_GOAL_CHARS = 400
 # the route and the model can supply these, and an uncapped list is a way to
 # write gigabytes into the session file one request at a time.
 MAX_GOAL_INCLUDES = 8
-MAX_GOAL_FIELDS = len(generic.FIELDS)
+MAX_GOAL_FIELDS = len(generic.FIELDS) * generic.MAX_PEOPLE
 
 
 class GoalError(ValueError):
@@ -69,7 +69,7 @@ def new_goal(
         raise GoalError("GOAL_TOO_LONG", f"A goal cannot exceed {MAX_GOAL_CHARS} characters.")
     if kind not in KINDS:
         raise GoalError("INVALID_GOAL_KIND", f"Unknown goal kind: {kind}")
-    unknown = [name for name in fields if name not in generic.FIELDS]
+    unknown = [name for name in fields if not generic.is_field(name)]
     if unknown:
         raise GoalError("UNKNOWN_FIELD", f"Unknown generic field(s) in goal: {sorted(unknown)}")
     if len(fields) > MAX_GOAL_FIELDS:
@@ -169,12 +169,94 @@ def render(goals: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+EDGE_GOAL_PREFIX = "relation:"
+EXCLUSION_GOAL_PREFIX = "exclusions:"
+
+
+def is_derived(goal: dict[str, Any]) -> bool:
+    """Whether this goal was derived from the document for one compile."""
+    identifier = str(goal.get("id") or "")
+    return identifier == "exclusions" or identifier.startswith("edge:")
+
+
+def without_derived(goals: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """The user's own standing goals, with the per-compile ones stripped.
+
+    Derived goals are rebuilt from the document on every compile. Storing one
+    would outlive the relation it came from -- and, observed live, the compile
+    wrote its evaluated list straight back to the session, so every compile
+    added another copy of every relation to the user's ledger.
+    """
+    return [goal for goal in (goals or []) if not is_derived(goal)]
+
+
+def from_exclusions(doc: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """What must not appear, as a question a verifier can actually answer.
+
+    A negative cannot be audited by looking for words: the prose that obeys
+    "no visible props" never contains the phrase, and the prose that breaks it
+    ("mirrors and barres along the walls") does not contain it either.
+    """
+    if not isinstance(doc, dict):
+        return []
+    record = generic.record(doc, "exclusions")
+    if not record["value"] or record["origin"] not in generic.LOCKED_ORIGINS:
+        return []
+    text = f"{EXCLUSION_GOAL_PREFIX} the prompt must not include: {record['value']}"
+    try:
+        goal = new_goal(text[:MAX_GOAL_CHARS], KIND_JUDGED)
+    except GoalError:
+        return []
+    goal["id"] = "exclusions"
+    return [goal]
+
+
+def from_edges(doc: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Locked relations, as goals the verifier already knows how to check.
+
+    A relation cannot be audited by counting words: "B on A (across her lap)"
+    shares every token with "A on B", and three words of overlap prove nothing
+    either way. But "does this prompt say B is lying across A's lap?" is exactly
+    the yes/no the judged-goal verifier was built for -- so a locked edge
+    becomes an ephemeral judged goal for the duration of one compile, and the
+    repair machinery treats a dropped relation like any other unmet goal.
+
+    Ephemeral on purpose: these are derived from the document, so they must not
+    be stored beside the user's own standing goals or they would outlive the
+    relation they came from.
+    """
+    if not isinstance(doc, dict):
+        return []
+    result: list[dict[str, Any]] = []
+    for edge in generic.locked_edges(doc):
+        subject, target = _named(doc, edge["from"]), _named(doc, edge["to"])
+        meaning = generic.RELATIONS[edge["rel"]]
+        qualifier = f" ({edge['qualifier']})" if edge.get("qualifier") else ""
+        text = f"{EDGE_GOAL_PREFIX} {subject} is {meaning} {target}{qualifier}"
+        try:
+            goal = new_goal(text[:MAX_GOAL_CHARS], KIND_JUDGED)
+        except GoalError:
+            continue
+        goal["id"] = f"edge:{edge['from']}:{edge['rel']}:{edge['to']}"
+        result.append(goal)
+    return result
+
+
+def _named(doc: dict[str, Any], endpoint: str) -> str:
+    """A person letter reads as their description; a noun is already one."""
+    index = generic.endpoint_person(endpoint)
+    if not index:
+        return endpoint
+    value = generic.record(doc, generic.person_key("subject", index))["value"]
+    return f"{value} ({endpoint})" if value else f"person {endpoint}"
+
+
 def _field_verdict(goal: dict[str, Any], doc: dict[str, Any]) -> tuple[bool, str]:
     unmet: list[str] = []
     notes: list[str] = []
     for key in goal["fields"]:
         entry = generic.record(doc, key)
-        label = generic.LABELS[key]
+        label = generic.label_for(key)
         if entry["origin"] == generic.ORIGIN_UNSPECIFIED:
             unmet.append(f"{label} is still unspecified")
         elif entry["origin"] == generic.ORIGIN_INVENTED:
@@ -190,9 +272,52 @@ def _field_verdict(goal: dict[str, Any], doc: dict[str, Any]) -> tuple[bool, str
     return True, ", ".join(notes)
 
 
+PRESENCE_THRESHOLD = 0.6
+"""Share of a phrase's distinctive words the prompt must carry.
+
+The same bar the locked-fact audit uses, for the same reason: the compile is
+expected to reword, and only vocabulary *going missing* is evidence the fact
+went with it.
+"""
+
+def _phrase_present(phrase: str, prompt: str, prompt_stems: set[str]) -> bool:
+    """Whether the compiled prompt still carries this required phrase.
+
+    Deliberately NOT a substring test any more. `must_include` holds a sentence
+    the conversation wrote ("standing in front of a wooden desk"), and the
+    compile is *supposed* to reword it -- "stands directly in front of a
+    polished wooden desk" satisfies the user and failed the old check, which
+    then burned a repair pass and reported the goal unmet. An inserted adverb
+    was enough to do it.
+
+    A literal hit still wins, so "always say Coca-Cola" behaves exactly as
+    before. Otherwise every name must survive (a name is the handle the user
+    steers with, never averaged away) and most of the distinctive words with it.
+
+    Known limit: this is bag-of-words, so it cannot see negation -- "no
+    undergarments" and "undergarments" carry the same tokens. A goal whose
+    meaning turns on a negation or on nuance belongs to the `judged` kind,
+    which spends a verifier pass on it.
+    """
+    normalized = normalize_unicode_text(phrase or "").strip().lower()
+    if not normalized:
+        return True
+    if normalized in (prompt or "").lower():
+        return True
+    wanted = generic.distinctive_stems(phrase)
+    if not wanted:
+        return False
+    # The same name rule the locked-fact audit uses: a name must survive whole,
+    # but a capital that is only sentence case is an ordinary word.
+    _considered, dropped = generic.name_check(phrase, prompt or "")
+    if dropped:
+        return False
+    return len(wanted & prompt_stems) / len(wanted) >= PRESENCE_THRESHOLD
+
+
 def _presence_verdict(goal: dict[str, Any], prompt: str) -> tuple[bool, str]:
-    lowered = (prompt or "").lower()
-    missing = [item for item in goal["must_include"] if item.lower() not in lowered]
+    prompt_stems = generic.distinctive_stems(prompt or "")
+    missing = [item for item in goal["must_include"] if not _phrase_present(item, prompt, prompt_stems)]
     if missing:
         return False, "missing from the prompt: " + ", ".join(missing)
     return True, "present in the prompt"

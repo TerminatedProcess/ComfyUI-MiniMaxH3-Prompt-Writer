@@ -8,6 +8,13 @@ export function generateModelSummaryMarkup(icon) {
     </button>`;
 }
 
+// Kept local rather than imported: this module is loaded standalone (tests read
+// it as source), so it stays dependency-free. Mirrors writer_controls' version.
+function copyFieldButton(icon, selector, title) {
+  return `<button class="h3ps-icon-button h3ps-field-copy" type="button" data-copy-field="${selector}"
+    data-copy-title="${title}" title="${title}" aria-label="${title}">${icon("copy", 14)}</button>`;
+}
+
 function systemPromptPanel(profile, label, description, icon, hidden = false) {
   return `
     <div class="h3ps-system-prompt-panel" data-system-prompt-panel="${profile}" ${hidden ? "hidden" : ""}>
@@ -18,7 +25,7 @@ function systemPromptPanel(profile, label, description, icon, hidden = false) {
       </header>
       <p>${description} The official model guides are applied separately and are never modified.</p>
       <textarea data-system-prompt="${profile}" maxlength="8000" spellcheck="true" disabled></textarea>
-      <footer><small data-system-prompt-count="${profile}">0 / 8,000</small><button type="button" data-system-prompt-reset="${profile}" hidden>Reset to default</button></footer>
+      <footer><small data-system-prompt-count="${profile}">0 / 8,000</small>${copyFieldButton(icon, `[data-system-prompt=${profile}]`, "Copy system prompt")}<button type="button" data-system-prompt-reset="${profile}" hidden>Reset to default</button></footer>
     </div>`;
 }
 

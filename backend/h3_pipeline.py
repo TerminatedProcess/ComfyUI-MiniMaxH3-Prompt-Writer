@@ -9,6 +9,7 @@ from .context import (
     CONTEXT_SAFETY_TOKENS,
     estimate_visual_tokens,
     non_thinking_output_tokens,
+    repair_attempt_budget,
 )
 from . import goals as goal_ledger
 from .media import STORE, MediaError
@@ -367,18 +368,26 @@ def run_h3_pipeline(
     format_repair_reason = None
     format_repair_failure = None
     format_repair_method = None
+    format_repair_attempts = 0
+    # How many corrections to try before handing the problem back. Each one is
+    # a model call, so this is the user's time being spent: they choose.
+    allowed_attempts = repair_attempt_budget(assembled)
     # The gate is the audit's own verdict, whatever the target. Every audit
     # reports repair_required, so an image target's format failure, a dropped
-    # locked fact and an unmet goal all reach the same single repair pass.
-    repair_needed = initial_audit.get("repair_required") is True
+    # locked fact and an unmet goal all reach the same repair loop.
+    original_prompt = prompt
+    original_audit = initial_audit
     repair_plan: dict[str, Any] = {}
-    if repair_needed:
+    while initial_audit.get("repair_required") is True and format_repair_attempts < allowed_attempts:
         format_repair_attempted = True
+        format_repair_attempts += 1
+        # Re-planned every pass, from the CURRENT audit: attempt two should be
+        # correcting what attempt one left behind, not the original complaint.
         repair_plan = target.repair_plan(assembled, messages, prompt, initial_audit)
-        repair_plan["original"] = prompt
-        repair_messages = repair_plan["messages"]
+        repair_plan["original"] = original_prompt
         format_repair_method = repair_plan["method"]
-        format_repair_reason = repair_plan.get("reason") or "format audit"
+        if format_repair_reason is None:
+            format_repair_reason = repair_plan.get("reason") or "format audit"
         if is_cancelled():
             raise ModelError("GENERATION_CANCELLED", "Generation was cancelled before prompt correction.")
         repair_output_tokens = (
@@ -387,17 +396,19 @@ def run_h3_pipeline(
             else standard_output_tokens
         )
         repair_response = complete(
-            messages=repair_messages,
+            messages=repair_plan["messages"],
             temperature=0.3,
             top_p=0.9,
             top_k=40,
             max_tokens=repair_output_tokens,
-            seed=seed,
+            seed=None if seed is None else seed + format_repair_attempts,
             thinking=False,
             purpose="repair",
         )
         repair_usage = repair_response.get("usage", {})
-        format_repair_tokens = int(repair_usage.get("completion_tokens", 0))
+        format_repair_tokens += int(repair_usage.get("completion_tokens", 0))
+        usage["prompt_tokens"] = int(usage.get("prompt_tokens", 0)) + int(repair_usage.get("prompt_tokens", 0))
+        usage["completion_tokens"] = int(usage.get("completion_tokens", 0)) + int(repair_usage.get("completion_tokens", 0))
         repair_finish_reason = repair_response["choices"][0].get("finish_reason")
         repaired, _repair_reasoning = final_message_text(
             repair_response["choices"][0]["message"],
@@ -409,29 +420,36 @@ def run_h3_pipeline(
         # look identical to a successful one.
         if not repaired:
             format_repair_failure = "empty repair"
-        elif repair_finish_reason == "length":
+            continue
+        if repair_finish_reason == "length":
             format_repair_failure = "repair reached its output limit"
-        else:
-            accepted, repaired_audit, failure = target.accept_repair(assembled, prompt, repaired, repair_plan)
-            if accepted:
-                prompt = repaired
-                format_repair_applied = True
-                initial_audit = repaired_audit
-                # Re-auditing reset every judged goal to pending, so a repair
-                # driven by an unmet goal was accepted without anyone checking
-                # it fixed that goal, and the user saw "could not be verified".
-                goal_verification_tokens += verify_pending_goals(initial_audit, prompt)
-                if initial_audit.get("repair_required") is True:
-                    format_repair_applied = False
-                    prompt = repair_plan.get("original", prompt)
-                    format_repair_failure = (
-                        "repaired draft still failed: "
-                        + ", ".join(initial_audit.get("shared_failures") or ["an unmet goal"])
-                    )
-            else:
-                format_repair_failure = failure
-        usage["prompt_tokens"] = int(usage.get("prompt_tokens", 0)) + int(repair_usage.get("prompt_tokens", 0))
-        usage["completion_tokens"] = int(usage.get("completion_tokens", 0)) + format_repair_tokens
+            continue
+        accepted, repaired_audit, failure = target.accept_repair(assembled, prompt, repaired, repair_plan)
+        if not accepted:
+            format_repair_failure = failure
+            continue
+        # Keep the corrected draft as the base for any further pass: it is
+        # usually closer than the original, and the original is still held for
+        # the fallback below.
+        prompt = repaired
+        initial_audit = repaired_audit
+        # Re-auditing reset every judged goal to pending, so a repair driven by
+        # an unmet goal was accepted without anyone checking it fixed that goal,
+        # and the user saw "could not be verified".
+        goal_verification_tokens += verify_pending_goals(initial_audit, prompt)
+        if initial_audit.get("repair_required") is not True:
+            format_repair_applied = True
+            format_repair_failure = None
+            break
+        format_repair_failure = (
+            "the corrected draft still failed: "
+            + ", ".join(initial_audit.get("shared_failures") or ["an unmet goal"])
+        )
+    if format_repair_attempted and not format_repair_applied:
+        # Hand back what the model wrote itself rather than a spliced draft that
+        # failed too -- and the audit that actually describes it.
+        prompt = original_prompt
+        initial_audit = original_audit
 
     generation_seconds = time.perf_counter() - generation_started
     output_tokens = int(usage.get("completion_tokens", 0))
@@ -456,6 +474,8 @@ def run_h3_pipeline(
         "reasoning_tokens": reasoning_tokens,
         "primary_finish_reason": primary_finish_reason,
         "format_repair_attempted": format_repair_attempted,
+        "format_repair_attempts": format_repair_attempts,
+        "format_repair_allowed": allowed_attempts,
         "format_repair_applied": format_repair_applied,
         "format_repair_reason": format_repair_reason,
         "format_repair_failure": format_repair_failure,

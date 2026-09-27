@@ -49,6 +49,22 @@
 .h3ps-generic-card > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: calc(10px * var(--h3ps-interface-scale)) calc(12px * var(--h3ps-interface-scale)); border-bottom: 1px solid var(--h3ps-border-soft); }
 .h3ps-generic-card > header strong { font-size: var(--h3ps-font-heading-sm); font-weight: 640; }
 .h3ps-generic-card > header small { display: block; color: var(--h3ps-muted); font-size: var(--h3ps-font-label); }
+/* The Naughty dial: a switch could not say how far, so it is a range with its
+   level named beside it. Sized to sit in the flags row next to Story builder. */
+.h3ps-heat { display: flex; flex-direction: column; gap: calc(3px * var(--h3ps-interface-scale)); min-width: calc(148px * var(--h3ps-interface-scale)); cursor: pointer; }
+.h3ps-heat-head { display: flex; align-items: baseline; gap: calc(6px * var(--h3ps-interface-scale)); color: var(--h3ps-text-label-strong); font-size: var(--h3ps-font-label); font-weight: 650; letter-spacing: .035em; text-transform: uppercase; }
+.h3ps-heat-head b { color: var(--h3ps-accent); font-weight: 650; letter-spacing: 0; text-transform: none; }
+/* Same track and thumb as the Duration slider, so the two read as one family. */
+.h3ps-heat input[type="range"] { width: 100%; height: calc(18px * var(--h3ps-interface-scale)); margin: 0; appearance: none; background: transparent; cursor: pointer; }
+.h3ps-heat input[type="range"]::-webkit-slider-runnable-track { height: 3px; border-radius: 3px; background: linear-gradient(90deg, var(--h3ps-accent) 0 var(--h3ps-range, 50%), var(--h3ps-range-track) var(--h3ps-range, 50%) 100%); }
+.h3ps-heat input[type="range"]::-webkit-slider-thumb { width: calc(14px * var(--h3ps-interface-scale)); height: calc(14px * var(--h3ps-interface-scale)); margin-top: -5.5px; appearance: none; border: 2px solid var(--h3ps-field); border-radius: 50%; background: var(--h3ps-accent-strong); box-shadow: 0 0 0 1px rgba(255,135,110,.65); }
+.h3ps-heat input[type="range"]::-moz-range-track { height: 3px; border-radius: 3px; background: var(--h3ps-range-track); }
+.h3ps-heat input[type="range"]::-moz-range-progress { height: 3px; border-radius: 3px; background: var(--h3ps-accent); }
+.h3ps-heat input[type="range"]::-moz-range-thumb { width: calc(14px * var(--h3ps-interface-scale)); height: calc(14px * var(--h3ps-interface-scale)); border: 2px solid var(--h3ps-field); border-radius: 50%; background: var(--h3ps-accent-strong); }
+.h3ps-delivery-repairs { display: flex; align-items: center; gap: calc(6px * var(--h3ps-interface-scale)); }
+.h3ps-delivery-repairs label { color: var(--h3ps-muted); font-size: var(--h3ps-font-label); white-space: nowrap; }
+.h3ps-delivery-repairs select { min-width: calc(58px * var(--h3ps-interface-scale)); }
+.h3ps-generic-actions { display: flex; align-items: center; gap: calc(10px * var(--h3ps-interface-scale)); white-space: nowrap; }
 .h3ps-generic-empty { margin: 0; padding: calc(14px * var(--h3ps-interface-scale)); color: var(--h3ps-muted); font-size: var(--h3ps-font-control); line-height: 1.5; }
 .h3ps-generic-warning { margin: 0; padding: calc(10px * var(--h3ps-interface-scale)) calc(12px * var(--h3ps-interface-scale)); border-top: 1px solid var(--h3ps-border-soft); color: var(--h3ps-warning); font-size: var(--h3ps-font-label); }
 .h3ps-generic-body { max-height: calc(360px * var(--h3ps-interface-scale)); overflow-y: auto; }
@@ -106,6 +122,8 @@
 .h3ps-negative-output > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: calc(8px * var(--h3ps-interface-scale)) calc(10px * var(--h3ps-interface-scale)); border-bottom: 1px solid var(--h3ps-border-soft); }
 .h3ps-negative-output > header strong { font-size: var(--h3ps-font-control); font-weight: 640; }
 .h3ps-negative-output > header small { color: var(--h3ps-muted); font-size: var(--h3ps-font-label); }
+/* Copy is the same icon button wherever a prompt field lives. */
+.h3ps-negative-output > header .h3ps-field-copy, .h3ps-generic-actions .h3ps-field-copy { align-self: center; width: calc(24px * var(--h3ps-interface-scale)); height: calc(24px * var(--h3ps-interface-scale)); margin: calc(-4px * var(--h3ps-interface-scale)) 0; }
 .h3ps-negative-editor { width: 100%; min-height: calc(56px * var(--h3ps-interface-scale)); padding: calc(9px * var(--h3ps-interface-scale)); border: 0; background: transparent; resize: vertical; }
 .h3ps-goal-summary { margin: calc(8px * var(--h3ps-interface-scale)) 0 0; font-size: var(--h3ps-font-control); }
 .h3ps-goal-summary[data-state="unmet"] { color: var(--h3ps-danger); }

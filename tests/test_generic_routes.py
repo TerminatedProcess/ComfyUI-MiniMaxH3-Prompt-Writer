@@ -146,7 +146,7 @@ class GenericRouteTests(unittest.TestCase):
 
     def test_a_missing_session_id_is_refused_rather_than_invented(self):
         """A generated id would write the document where the caller cannot find it."""
-        for path in ("/session/inputs", "/generic/build", "/generic/turn", "/generic/field", "/goals", "/session/reset"):
+        for path in ("/session/inputs", "/generic/build", "/generic/turn", "/generic/field", "/goals", "/session/reset", "/generic/describe"):
             status, payload = self.call("POST", path, {"model_id": "m", "message": "x", "field": "mood", "text": "x"})
             self.assertEqual(status, 400, path)
             self.assertEqual(payload["error"]["code"], "INVALID_SESSION", path)
@@ -270,11 +270,12 @@ class GenericRouteTests(unittest.TestCase):
 
     # -- clearing -------------------------------------------------------
 
-    def test_clearing_prompts_clears_the_generic_prompt_but_keeps_your_work(self):
-        """The reported bug: Clear prompts left the actual prompt standing."""
+    def test_clearing_prompts_clears_every_written_thing_but_keeps_the_settings(self):
+        """The reported bug: Clear prompts left the brief and the conversation standing."""
         self.answers.append(json.dumps({"scene": {"subject": "Bob", "mood": "wistful"}}))
         self.call("POST", "/generic/build", {"session_id": SESSION, "model_id": "m", "brief": "Bob waits"})
         self.call("POST", "/goals", {"session_id": SESSION, "text": "never mention a brand"})
+        self.call("POST", "/session/inputs", {"session_id": SESSION, "duration_seconds": 7, "nsfw": False})
         state = session_store.load(SESSION)
         session_store.record_output(state, "Krea2", prompt="a compiled prose prompt")
         session_store.save(state)
@@ -284,9 +285,11 @@ class GenericRouteTests(unittest.TestCase):
         session = payload["session"]
         self.assertEqual(session["unspecified"], list(generic.FIELDS), "the document is gone")
         self.assertEqual(session["outputs"], {}, "the compiled prompts are gone")
-        self.assertEqual(session["inputs"]["brief"], "Bob waits", "the brief is yours and stays")
-        self.assertEqual(len(session["goals"]), 1, "goals are yours and stay")
-        self.assertTrue(session["conversation"], "the conversation stays")
+        self.assertEqual(session["inputs"]["brief"], "", "the brief is gone")
+        self.assertEqual(session["goals"], [], "the goals are gone")
+        self.assertEqual(session["conversation"], [], "the conversation is gone")
+        self.assertEqual(session["inputs"]["duration_seconds"], 7, "delivery settings are not prompts")
+        self.assertFalse(session["inputs"]["nsfw"], "the flags are not prompts")
 
     def test_clearing_everything_takes_the_goals_and_the_conversation_too(self):
         self.answers.append(json.dumps({"scene": {"subject": "Bob"}}))
@@ -335,6 +338,191 @@ class GenericRouteTests(unittest.TestCase):
         self.call("POST", "/generic/expand", {"session_id": SESSION, "model_id": "m"})
         _status, session = self.call("GET", "/session", query={"session_id": SESSION})
         self.assertEqual(session["session"]["inputs"]["brief"], "a courier on a rooftop")
+
+    # -- reading the pose off the picture ---------------------------------
+
+    def test_the_probe_fills_a_pose_the_build_left_empty(self):
+        self.attach(self.picture())
+        self.answers.append(json.dumps({"scene": {"subject": "a woman"}}))
+        self.answers.append(json.dumps({
+            "seat_in_frame": True, "seat_occupied": False, "lap_visible": False,
+            "legs_upright": False, "body_vs_furniture": "in front of its edge",
+            "camera_height": "eye level",
+        }))
+        status, payload = self.call("POST", "/generic/build", {
+            "session_id": SESSION, "model_id": "m", "brief": "a woman at her desk",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["session"]["fields"]["pose"]["value"], "standing, in front of the desk edge")
+        self.assertEqual(payload["session"]["fields"]["pose"]["origin"], "asset")
+        self.assertIn("pose", payload["changed"])
+        self.assertIn("Pose read from the picture", payload["session"]["conversation"][-1]["text"])
+
+    def test_a_probe_that_contradicts_the_build_asks_instead_of_overwriting(self):
+        """Both passes are unreliable here, so a disagreement is the user's call.
+
+        Measured: the same model answered the same evidence question two ways on
+        one image depending on the wording. A second opinion may flag, never
+        overrule.
+        """
+        self.attach(self.picture())
+        self.answers.append(json.dumps({"scene": {"subject": "a woman", "pose": "Sitting at her desk"}}))
+        self.answers.append(json.dumps({
+            "seat_in_frame": True, "seat_occupied": False, "lap_visible": False,
+            "legs_upright": False, "body_vs_furniture": "in front of its edge",
+        }))
+        _status, payload = self.call("POST", "/generic/build", {
+            "session_id": SESSION, "model_id": "m", "brief": "a woman at her desk",
+        })
+        self.assertEqual(payload["session"]["fields"]["pose"]["value"], "Sitting at her desk", "nothing was overwritten")
+        turn = payload["session"]["conversation"][-1]["text"]
+        self.assertIn("ambiguous about the pose", turn)
+        self.assertIn("Say which is right", turn)
+
+    def test_two_people_in_the_picture_are_flagged_rather_than_guessed_at(self):
+        self.attach(self.picture())
+        self.answers.append(json.dumps({"scene": {"subject": "a woman and a man"}}))
+        self.answers.append(json.dumps({
+            "people_count": "more than one", "seat_in_frame": True, "seat_occupied": True,
+            "lap_visible": True, "legs_upright": True, "body_vs_furniture": "behind it",
+        }))
+        _status, payload = self.call("POST", "/generic/build", {
+            "session_id": SESSION, "model_id": "m", "brief": "two people in a study",
+        })
+        self.assertEqual(payload["session"]["fields"]["pose"]["value"], "", "no pose was invented for either of them")
+        self.assertIn("More than one person", payload["session"]["conversation"][-1]["text"])
+        self.assertIn("each person's Pose", payload["session"]["conversation"][-1]["text"])
+
+    def test_a_probe_that_agrees_with_the_build_says_nothing(self):
+        self.attach(self.picture())
+        self.answers.append(json.dumps({"scene": {"subject": "a woman", "pose": "Standing, three-quarter to the camera"}}))
+        self.answers.append(json.dumps({
+            "seat_in_frame": True, "seat_occupied": False, "lap_visible": False,
+            "legs_upright": True, "body_vs_furniture": "in front of its edge",
+        }))
+        _status, payload = self.call("POST", "/generic/build", {
+            "session_id": SESSION, "model_id": "m", "brief": "a woman at her desk",
+        })
+        self.assertEqual(payload["session"]["fields"]["pose"]["value"], "Standing, three-quarter to the camera")
+        self.assertNotIn("ambiguous", payload["session"]["conversation"][-1]["text"])
+
+    def test_the_probe_never_overrules_what_the_user_said_about_the_pose(self):
+        self.attach(self.picture())
+        self.call("POST", "/generic/field", {"session_id": SESSION, "field": "pose", "value": "standing"})
+        self.answers.append(json.dumps({"scene": {"subject": "a woman"}}))
+        self.answers.append(json.dumps({"seat_in_frame": True, "seat_occupied": True}))
+        _status, payload = self.call("POST", "/generic/build", {
+            "session_id": SESSION, "model_id": "m", "brief": "a woman at her desk",
+        })
+        self.assertEqual(payload["session"]["fields"]["pose"]["value"], "standing")
+
+    def test_a_probe_that_cannot_decide_leaves_the_build_alone(self):
+        self.attach(self.picture())
+        self.answers.append(json.dumps({"scene": {"subject": "a woman", "pose": "Sitting at her desk"}}))
+        self.answers.append("I am afraid I cannot tell from this picture.")
+        status, payload = self.call("POST", "/generic/build", {
+            "session_id": SESSION, "model_id": "m", "brief": "a woman at her desk",
+        })
+        self.assertEqual(status, 200, "a failed probe must not fail the build")
+        self.assertEqual(payload["session"]["fields"]["pose"]["value"], "Sitting at her desk")
+
+    def test_no_picture_means_no_probe_call(self):
+        self.attach()
+        self.answers.append(json.dumps({"scene": {"subject": "a woman"}}))
+        status, _payload = self.call("POST", "/generic/build", {
+            "session_id": SESSION, "model_id": "m", "brief": "a woman at her desk",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(self.answers, [], "the build answer was consumed and nothing else was asked for")
+
+    # -- describing an image into the brief -------------------------------
+
+    def attach(self, *assets):
+        """Pretend these are the session's attached media."""
+        manifest = {"session_id": SESSION, "mode": "Reference", "valid": True, "assets": list(assets)}
+        item = patch("backend.generic_routes._manifest", lambda _session_id: manifest)
+        item.start()
+        self.addCleanup(item.stop)
+
+    @staticmethod
+    def picture(asset_id="a1", reference="<Picture 1>", type="image"):
+        return {
+            "id": asset_id, "reference": reference, "filename": f"{asset_id}.png", "type": type,
+            "content_url": f"/media/{asset_id}.png", "frames": [],
+            "prepared_width": 1024, "prepared_height": 576,
+        }
+
+    def test_describing_a_picture_writes_the_brief_from_it(self):
+        self.attach(self.picture())
+        self.answers.append("A woman in a red coat stands at a rain-dark tram stop at blue hour, looking down "
+                            "the empty track.")
+        status, payload = self.call("POST", "/generic/describe", {
+            "session_id": SESSION, "model_id": "m", "asset_id": "a1",
+        })
+        self.assertEqual(status, 200)
+        self.assertIn("red coat", payload["brief"])
+        self.assertEqual(payload["previous_brief"], "")
+        self.assertEqual(payload["session"]["inputs"]["brief"], payload["brief"])
+
+    def test_describing_a_second_picture_adds_to_the_brief_instead_of_replacing_it(self):
+        self.attach(self.picture(), self.picture("a2", "<Picture 2>"))
+        self.call("POST", "/session/inputs", {"session_id": SESSION, "brief": "she waits for the tram"})
+        self.answers.append("A woman in a red coat under a station light.")
+        _status, payload = self.call("POST", "/generic/describe", {
+            "session_id": SESSION, "model_id": "m", "asset_id": "a2",
+        })
+        self.assertTrue(payload["brief"].startswith("she waits for the tram"))
+        self.assertIn("red coat", payload["brief"])
+        self.assertEqual(payload["previous_brief"], "she waits for the tram")
+        self.assertEqual(payload["described"], "A woman in a red coat under a station light.")
+
+    def test_only_the_named_picture_is_sent_to_the_model(self):
+        self.attach(self.picture(), self.picture("a2", "<Picture 2>"))
+        seen = {}
+
+        class _Backend:
+            def generate(self, _model, assembled, _session_id, **_kwargs):
+                seen.update(assembled)
+                return {"prompt": "A woman in a red coat."}
+
+            def cancel(self):
+                return True
+
+        async def fake_prepare(_body, _assembled, _request_id):
+            return {"id": "m", "family": "gguf", "name": "m"}, _Backend(), {"max_output_tokens": 2048}
+
+        with patch.object(routes, "_prepare_generation_runtime", fake_prepare):
+            self.call("POST", "/generic/describe", {"session_id": SESSION, "model_id": "m", "asset_id": "a2"})
+        self.assertEqual([item["asset_id"] for item in seen["media_inputs"]], ["a2"])
+        self.assertEqual([item["id"] for item in seen["input"]["media_manifest"]["assets"]], ["a2"])
+        self.assertEqual(seen["generic_stage"], "describe")
+
+    def test_describing_refuses_media_that_is_not_a_picture(self):
+        self.attach(self.picture("v1", "<Video 1>", type="video"))
+        status, payload = self.call("POST", "/generic/describe", {
+            "session_id": SESSION, "model_id": "m", "asset_id": "v1",
+        })
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "UNSUPPORTED_ASSET")
+
+    def test_describing_media_that_is_gone_says_so(self):
+        self.attach()
+        status, payload = self.call("POST", "/generic/describe", {
+            "session_id": SESSION, "model_id": "m", "asset_id": "a1",
+        })
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["error"]["code"], "ASSET_NOT_FOUND")
+
+    def test_a_refused_description_leaves_the_brief_alone(self):
+        self.attach(self.picture())
+        self.call("POST", "/session/inputs", {"session_id": SESSION, "brief": "she waits for the tram"})
+        self.answers.append("- a woman\n- a coat")
+        status, _payload = self.call("POST", "/generic/describe", {
+            "session_id": SESSION, "model_id": "m", "asset_id": "a1",
+        })
+        self.assertEqual(status, 502)
+        _status, session = self.call("GET", "/session", query={"session_id": SESSION})
+        self.assertEqual(session["session"]["inputs"]["brief"], "she waits for the tram")
 
     def test_a_turn_before_a_build_is_refused_with_a_reason(self):
         status, payload = self.call("POST", "/generic/turn", {

@@ -12,7 +12,7 @@ from typing import Any
 
 from aiohttp import web
 
-from . import conversation, generic, goals as goal_ledger, session_store
+from . import conversation, generic, goals as goal_ledger, heat as heat_levels, pose_probe, session_store
 from .assembly import _media_inputs
 from .media import SESSION_MEDIA_MODE, STORE, MediaError, parse_session_id
 from .models.contract import ModelError
@@ -41,11 +41,20 @@ def _manifest(session_id: str) -> dict[str, Any]:
         return {"session_id": session_id, "mode": SESSION_MEDIA_MODE, "assets": [], "valid": True}
 
 
-def _flags(state: dict[str, Any], body: dict[str, Any]) -> tuple[bool, bool]:
+def _flags(state: dict[str, Any], body: dict[str, Any]) -> tuple[int, bool]:
+    """(heat level, story). The request wins over the session, as before.
+
+    Returns the level rather than the old boolean: every stage that writes prose
+    now takes it, and `heat.permits_adult` recovers the boolean where something
+    still wants one.
+    """
     inputs = state.get("inputs", {})
-    nsfw = body.get("nsfw", inputs.get("nsfw", True))
+    level = heat_levels.resolve(
+        heat=body.get("heat", inputs.get("heat")),
+        nsfw=body.get("nsfw", inputs.get("nsfw")),
+    )
     story = body.get("story", inputs.get("story", True))
-    return bool(nsfw), bool(story)
+    return level, bool(story)
 
 
 def register_generic_routes(routes, services) -> None:
@@ -85,6 +94,71 @@ def register_generic_routes(routes, services) -> None:
         finally:
             services._release_generation_request(request_id)
 
+    async def _probe_pose(
+        body: dict[str, Any], doc: dict[str, Any], manifest: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool, str]:
+        """A second opinion on the pose, from evidence rather than judgement.
+
+        Deliberately NOT an authority. Measured on one real reference: asked to
+        name the pose the model said "sitting" (wrong); asked what was visible it
+        said the seat was empty (right); asked what was visible in slightly
+        different words it said the seat was occupied (wrong again). A second
+        pass that flips with the phrasing cannot be allowed to overwrite the
+        first one silently.
+
+        So: it fills an empty pose, it agrees quietly, and when it CONTRADICTS
+        the build it changes nothing and asks the user -- one question in the
+        conversation, which is the one place a human tap is worth more than
+        either model pass. Never raises; a probe that fails leaves the build as
+        it was.
+        """
+        images = [item for item in manifest.get("assets", []) if item.get("type") == "image"]
+        if not images:
+            return doc, False, ""
+        record = generic.record(doc, "pose")
+        # The user's own word on the pose outranks any picture.
+        if record["origin"] not in generic.OBSERVABLE_ORIGINS:
+            return doc, False, ""
+        asset = images[0]
+        assembled = conversation.assemble_pose_probe(
+            session_id=body["session_id"],
+            asset=asset,
+            manifest={**manifest, "assets": [asset]},
+            media_inputs=_media_inputs([asset]),
+        )
+        try:
+            answers = conversation.read_json_object(await _single_call(body, assembled))
+            pose, why = pose_probe.derive(answers)
+        except (ModelError, conversation.ConversationError, ValueError):
+            return doc, False, ""
+        if not pose:
+            # Worth saying out loud, unlike an unreadable picture: the document
+            # holds one subject, so a second person in the frame means Pose and
+            # Staging cannot be trusted to be about the one the user means.
+            if pose_probe.normalize(answers).get("people_count") == pose_probe.MANY:
+                # The document holds each person separately now, so the honest
+                # note is about the probe's own limit: its evidence questions
+                # ("is the seat occupied?") stop being about one body.
+                return doc, False, (
+                    " More than one person is in the picture, so the pose was not read from the"
+                    " evidence -- check each person's Pose says what you mean."
+                )
+            return doc, False, ""
+        written = record["value"]
+        if not written:
+            value = pose_probe.phrase(pose, answers)
+            try:
+                doc = generic.set_field(doc, "pose", value, generic.ORIGIN_ASSET)
+            except generic.GenericError:
+                return doc, False, ""
+            return doc, True, f" Pose read from the picture: {value} -- {why}."
+        if pose_probe.agrees(pose, written):
+            return doc, False, ""
+        return doc, False, (
+            f" The picture is ambiguous about the pose: the description says \"{written}\", "
+            f"but {why}. Say which is right and it will be locked in."
+        )
+
     def _state_response(state: dict[str, Any], session_id: str, **extra: Any) -> web.Response:
         manifest = _manifest(session_id)
         state["media_snapshot"] = session_store.media_snapshot(manifest)
@@ -111,9 +185,14 @@ def register_generic_routes(routes, services) -> None:
             "default_mode": DEFAULT_MODE,
             "session_media_mode": SESSION_MEDIA_MODE,
             "generic": {
+                # The base shape only: a session's own field list travels with
+                # its document, because a second person adds keys to it.
                 "fields": list(generic.FIELDS),
                 "labels": dict(generic.LABELS),
                 "groups": [{"title": title, "fields": list(keys)} for title, keys in generic.GROUPS],
+                "person_fields": list(generic.PERSON_FIELDS),
+                "person_separator": generic.PERSON_SEPARATOR,
+                "max_people": generic.MAX_PEOPLE,
                 "origins": list(generic.ORIGINS),
             },
             "goal_kinds": list(goal_ledger.KINDS),
@@ -162,6 +241,21 @@ def register_generic_routes(routes, services) -> None:
                 if not isinstance(body[flag], bool):
                     return services._error("INVALID_REQUEST", f"{flag} must be a boolean.", status=400)
                 inputs[flag] = body[flag]
+        if "heat" in body:
+            if isinstance(body["heat"], bool) or not isinstance(body["heat"], int):
+                return services._error("INVALID_REQUEST", "heat must be a whole number.", status=400)
+            if body["heat"] not in heat_levels.LEVELS:
+                return services._error(
+                    "INVALID_REQUEST",
+                    f"heat must be between {heat_levels.CLEAN} and {heat_levels.GRAPHIC}.",
+                    status=400,
+                    details={"levels": list(heat_levels.LEVELS)},
+                )
+            inputs["heat"] = body["heat"]
+        elif "nsfw" in body:
+            # An older client sending only the boolean still moves the dial.
+            inputs["heat"] = heat_levels.resolve(nsfw=body["nsfw"])
+        inputs["nsfw"] = heat_levels.permits_adult(inputs.get("heat", heat_levels.DEFAULT))
         state["inputs"] = inputs
         if "mode" in body or "variant" in body:
             mode = body.get("mode") or state["target"].get("mode")
@@ -178,12 +272,14 @@ def register_generic_routes(routes, services) -> None:
 
     @routes.post(f"{prefix}/session/reset")
     async def reset_session(request: web.Request) -> web.Response:
-        """Clear the session, or just the prompts in it.
+        """Clear the session, or everything in it except the media.
 
-        `scope: "prompts"` keeps what you supplied -- media, brief, flags, goals
-        and the conversation -- and drops only what was generated from it: the
-        generic prompt and every compiled prompt. "Clear prompts" that left the
-        document standing was the bug this scope fixes.
+        `scope: "prompts"` is "Clear prompts -- keep media": the media and the
+        delivery settings (duration, ratio, flags, target) survive, every
+        written thing goes -- the brief, the document it seeded, the standing
+        goals, the conversation and every compiled prompt. Keeping the brief
+        here made the studio refill its just-cleared box from the session on the
+        very next render, which read as "Clear did nothing".
         """
         body = await services._json_body(request) or {}
         try:
@@ -198,7 +294,10 @@ def register_generic_routes(routes, services) -> None:
             return services._error("INVALID_REQUEST", "Unknown reset scope.", status=400)
         if scope == "prompts":
             state = session_store.load(session_id)
+            state["inputs"]["brief"] = ""
             state["generic"] = generic.new_doc()
+            state["goals"] = []
+            state["conversation"] = []
             state["outputs"] = {}
         else:
             state = session_store.reset(session_id)
@@ -222,7 +321,7 @@ def register_generic_routes(routes, services) -> None:
             return error(err)
         body["session_id"] = session_id
         state = session_store.load(session_id)
-        nsfw, story = _flags(state, body)
+        level, story = _flags(state, body)
         brief = str(body.get("brief") if body.get("brief") is not None else state["inputs"].get("brief") or "").strip()
         manifest = _manifest(session_id)
         if not brief and not manifest.get("assets"):
@@ -232,7 +331,7 @@ def register_generic_routes(routes, services) -> None:
                 status=400,
                 details={"field": "brief"},
             )
-        state["inputs"] = {**state["inputs"], "brief": brief[:8000], "nsfw": nsfw, "story": story}
+        state["inputs"] = {**state["inputs"], "brief": brief[:8000], "nsfw": heat_levels.permits_adult(level), "heat": level, "story": story}
         # Persisted before the model call, not after: the merge that protects a
         # concurrent edit re-reads inputs from disk, so anything written only in
         # this handler's copy would be dropped -- which lost the brief the build
@@ -251,7 +350,7 @@ def register_generic_routes(routes, services) -> None:
             media_inputs=_media_inputs(manifest.get("assets", [])),
             doc=doc,
             goals=state["goals"],
-            nsfw=nsfw,
+            heat=level,
             story=story,
             duration_seconds=state["inputs"].get("duration_seconds"),
             aspect_ratio=state["inputs"].get("aspect_ratio"),
@@ -277,6 +376,15 @@ def register_generic_routes(routes, services) -> None:
             return services._error(err.code, err.message, status=status, details=err.details)
         except (conversation.ConversationError, generic.GenericError) as err:
             return error(err, status=502)
+        # The build writes the pose from the same pass that writes the prose, and
+        # that pass is measurably bad at it -- it reasons its way to "sitting"
+        # from torso height. A second, tiny call asks the picture what is VISIBLE
+        # and the pose is derived from that. Best effort: a probe that fails or
+        # cannot decide leaves the build exactly as it was.
+        pose_note = ""
+        updated, pose_changed, pose_note = await _probe_pose(body, updated, manifest)
+        if pose_changed:
+            changed = tuple(dict.fromkeys((*changed, "pose")))
         # Anything the user changed while the model was working stays changed.
         state = session_store.merge_after_await(session_id, state, "generic", "goals", "conversation")
         state["generic"] = updated
@@ -285,7 +393,8 @@ def register_generic_routes(routes, services) -> None:
             "assistant",
             "Built the generic prompt from your brief"
             + (" and reference media." if manifest.get("assets") else ".")
-            + (" The first answer was unusable, so it was written again." if retried else ""),
+            + (" The first answer was unusable, so it was written again." if retried else "")
+            + pose_note,
             changed=changed,
             protected=protected,
         )
@@ -305,7 +414,7 @@ def register_generic_routes(routes, services) -> None:
             return error(err)
         body["session_id"] = session_id
         state = session_store.load(session_id)
-        nsfw, story = _flags(state, body)
+        level, story = _flags(state, body)
         brief = str(body.get("brief") if body.get("brief") is not None else state["inputs"].get("brief") or "").strip()
         if not brief:
             return services._error(
@@ -317,7 +426,7 @@ def register_generic_routes(routes, services) -> None:
             brief=brief,
             manifest=manifest,
             media_inputs=_media_inputs(manifest.get("assets", [])),
-            nsfw=nsfw,
+            heat=level,
             story=story,
         )
         try:
@@ -330,7 +439,77 @@ def register_generic_routes(routes, services) -> None:
             return error(err, status=502)
         # The previous wording travels back so the studio can offer an undo.
         state["inputs"] = {**state["inputs"], "brief": expanded}
-        return _state_response(state, session_id, brief=expanded, previous_brief=brief)
+        # Report the level it ran at. Without it, "the dial does nothing" is
+        # indistinguishable from "the dial did something you did not notice".
+        return _state_response(
+            state, session_id, brief=expanded, previous_brief=brief,
+            heat=level, heat_label=heat_levels.label(level),
+        )
+
+    @routes.post(f"{prefix}/generic/describe")
+    async def describe_asset(request: web.Request) -> web.Response:
+        """Write the brief from ONE attached image (the studio's double-click).
+
+        Appends rather than replaces when a brief already exists: describing a
+        second picture must not silently delete the first description, or the
+        words the user typed. `previous_brief` travels back either way, so the
+        same single undo that Expand uses puts it back.
+        """
+        body = await services._json_body(request)
+        if body is None:
+            return services._error("INVALID_REQUEST", "Expected a JSON object.", status=400)
+        try:
+            session_id = _session_id(body)
+        except session_store.SessionStoreError as err:
+            return error(err)
+        body["session_id"] = session_id
+        asset_id = str(body.get("asset_id") or "")
+        if not asset_id:
+            return services._error(
+                "INVALID_REQUEST", "An asset ID is required.", status=400, details={"field": "asset_id"},
+            )
+        manifest = _manifest(session_id)
+        asset = next((item for item in manifest.get("assets", []) if item.get("id") == asset_id), None)
+        if asset is None:
+            return services._error("ASSET_NOT_FOUND", "That media is no longer attached.", status=404)
+        if asset.get("type") != "image":
+            return services._error(
+                "UNSUPPORTED_ASSET",
+                "Only an image can be described into the brief.",
+                status=400,
+                details={"type": asset.get("type")},
+            )
+        state = session_store.load(session_id)
+        level, story = _flags(state, body)
+        # Narrowed to the one picture the user pointed at, manifest included, so
+        # the model is not also shown -- and does not describe -- the others.
+        single = {**manifest, "assets": [asset]}
+        assembled = conversation.assemble_describe(
+            session_id=session_id,
+            asset=asset,
+            manifest=single,
+            media_inputs=_media_inputs([asset]),
+            heat=level,
+            story=story,
+        )
+        try:
+            text = await _single_call(body, assembled)
+            described = conversation.clean_expanded_brief(text)
+        except ModelError as err:
+            status = 499 if err.code == "GENERATION_CANCELLED" else services._model_error_status(err)
+            return services._error(err.code, err.message, status=status, details=err.details)
+        except conversation.ConversationError as err:
+            return error(err, status=502)
+        # Re-read: the brief box debounces, so the wording may have changed while
+        # the model was running.
+        state = session_store.load(session_id)
+        previous = str(state["inputs"].get("brief") or "")
+        brief = f"{previous.rstrip()}\n\n{described}" if previous.strip() else described
+        brief = brief[:conversation.MAX_BRIEF_CHARS]
+        state["inputs"] = {**state["inputs"], "brief": brief}
+        return _state_response(
+            state, session_id, brief=brief, previous_brief=previous, described=described, asset_id=asset_id,
+        )
 
     @routes.post(f"{prefix}/generic/turn")
     async def generic_turn(request: web.Request) -> web.Response:
@@ -352,7 +531,7 @@ def register_generic_routes(routes, services) -> None:
                 "Generate the generic prompt first, then steer it here.",
                 status=409,
             )
-        nsfw, story = _flags(state, body)
+        level, story = _flags(state, body)
         manifest = _manifest(session_id)
         session_store.record_turn(state, "user", message)
         assembled = conversation.assemble_turn(
@@ -363,7 +542,7 @@ def register_generic_routes(routes, services) -> None:
             conversation=state["conversation"],
             manifest=manifest,
             media_inputs=_media_inputs(manifest.get("assets", [])),
-            nsfw=nsfw,
+            heat=level,
             story=story,
         )
         try:
@@ -413,7 +592,7 @@ def register_generic_routes(routes, services) -> None:
         except session_store.SessionStoreError as err:
             return error(err)
         field = body.get("field")
-        if field not in generic.FIELDS:
+        if not generic.is_field(field):
             return services._error("UNKNOWN_FIELD", "That field is not part of the generic prompt.", status=400)
         state = session_store.load(session_id)
         value = body.get("value")

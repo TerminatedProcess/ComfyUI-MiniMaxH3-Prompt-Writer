@@ -1112,6 +1112,8 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     duration_seconds: 8,
     aspect_ratio: "3:2",
     creative_brief: "A quiet shot.",
+    // The user's repair budget travels with every compile, not just the first.
+    repair_attempts: 3,
     model_id: "external-model",
     external_server: state.externalServerConfig,
     ollama_model: null,
@@ -1130,6 +1132,7 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     duration_seconds: 8,
     aspect_ratio: "3:2",
     creative_brief: "Original brief",
+    repair_attempts: 3,
     current_prompt: "Current",
     instruction: "Slower",
     model_id: "external-model",

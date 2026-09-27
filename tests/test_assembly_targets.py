@@ -10,6 +10,7 @@ from __future__ import annotations
 import unittest
 
 from backend import generic, goals
+from backend import heat
 from backend.assembly import AssemblyError, assemble_refinement, assemble_request
 
 SESSION = "11111111-2222-4333-8444-555555555555"
@@ -107,8 +108,10 @@ class FlagTests(unittest.TestCase):
         assembled = assemble_request(body("T2VA"))
         self.assertTrue(assembled["input"]["nsfw"])
         self.assertTrue(assembled["input"]["story"])
-        self.assertIn("Adult, explicit or otherwise mature content is permitted",
-                      assembled["system_prompt"]["content"])
+        # Default heat is "Sensual": the writer develops the charge in a scene
+        # rather than merely tolerating it.
+        self.assertEqual(assembled["input"]["heat"], heat.DEFAULT)
+        self.assertIn(heat.clause(heat.DEFAULT), assembled["system_prompt"]["content"])
 
     def test_flags_off_restores_the_strict_contract(self):
         assembled = assemble_request(body("T2VA", nsfw=False, story=False))

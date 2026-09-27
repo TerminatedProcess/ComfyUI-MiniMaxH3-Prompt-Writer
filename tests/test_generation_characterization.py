@@ -176,7 +176,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
         assembled = {
             "messages": [{"role": "user", "content": "Create a compact shot."}],
             "media_inputs": [],
-            "input": {"mode": "T2VA", "duration_seconds": 5, "creative_brief": "Create a compact shot."},
+            "input": {"mode": "T2VA", "duration_seconds": 5, "creative_brief": "Create a compact shot.", "repair_attempts": 1},
         }
 
         result = backend.generate(
@@ -191,6 +191,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
     def test_unmentioned_uploaded_audio_is_allowed_but_not_required_by_audit(self):
         assembled = {
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "Use Picture 1 for the character. The uploaded audio needs no role.",
@@ -235,6 +237,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
         )
         assembled = {
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "Use Picture 1 for the character.",
@@ -257,6 +261,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
         )
         assembled = {
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "Use Picture 1 for the character.",
@@ -287,6 +293,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
         )
         assembled = {
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "zibble frobnitz quux",
@@ -318,6 +326,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
 
         first_audit, first_policy, *_ = _audit(prompt_without_audio, {
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 **shared_input,
                 "current_prompt": prompt_with_audio,
                 "instruction": "zibble <Audio 1> frobnitz quux",
@@ -325,6 +335,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
         })
         second_audit, second_policy, *_ = _audit(prompt_without_audio, {
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 **shared_input,
                 "current_prompt": prompt_without_audio,
                 "instruction": "zibble frobnitz quux",
@@ -342,6 +354,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
     def test_refine_audio_named_only_by_instruction_can_be_added_or_omitted(self):
         assembled = {
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "Use Picture 1 for the character.",
@@ -376,6 +390,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
             "messages": [{"role": "user", "content": "Rewrite the prompt."}],
             "media_inputs": [],
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "Use Picture 1 for the character.",
@@ -414,6 +430,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
             "messages": [{"role": "user", "content": "Create a static scene."}],
             "media_inputs": [],
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "T2VA",
                 "duration_seconds": 5,
                 "creative_brief": "Create a static scene.",
@@ -445,6 +463,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
             ],
             "media_inputs": [],
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "T2VA",
                 "duration_seconds": 5,
                 "creative_brief": "Create a static scene.",
@@ -500,6 +520,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 "reserved_output_tokens", "debug_input_sequence",
                 "thinking_fallback", "thinking_attempt_tokens", "reasoning_tokens",
                 "primary_finish_reason", "format_repair_attempted",
+                # How many corrections were spent, and how many the user allowed.
+                "format_repair_attempts", "format_repair_allowed",
                 "format_repair_applied", "format_repair_reason",
                 "format_repair_failure", "format_repair_method",
                 "format_repair_multimodal", "format_repair_tokens", "seed", "cold_start",
@@ -526,6 +548,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
             ],
             "media_inputs": [],
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "T2VA",
                 "duration_seconds": 5,
                 "creative_brief": "Create a static scene.",
@@ -570,6 +594,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
             "messages": [{"role": "user", "content": "Create a static scene."}],
             "media_inputs": [],
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "T2VA",
                 "duration_seconds": 5,
                 "creative_brief": "Create a static scene.",
@@ -619,6 +645,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
             ],
             "media_inputs": [],
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "Use Picture 1 as Subject 1.",
@@ -666,6 +694,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
             ],
             "media_inputs": [],
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "Use Picture 1 as Subject 1.",
@@ -696,6 +726,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
             "messages": [{"role": "user", "content": "Use Picture 1."}],
             "media_inputs": [],
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "Use Picture 1.",
@@ -731,6 +763,8 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 {"type": "image", "asset_id": "two", "reference": "<Picture 2>", "requires_capability": "images"},
             ],
             "input": {
+                # These fixtures script exactly one repair answer.
+                "repair_attempts": 1,
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "Create a story from all active references.",
@@ -789,7 +823,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
             "media_inputs": [
                 {"type": "image", "asset_id": "one", "reference": "<Picture 1>", "requires_capability": "images"},
             ],
-            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use both.", "media_manifest": reference_manifest("<Picture 1>", "<Picture 2>")},
+            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use both.", "media_manifest": reference_manifest("<Picture 1>", "<Picture 2>"), "repair_attempts": 1},
         }
         fake_messages = [
             {"role": "system", "content": "reference guide"},
@@ -825,7 +859,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 {"role": "user", "content": "Use <Picture 1> as <Subject 1>."},
             ],
             "media_inputs": [],
-            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use Picture 1.", "media_manifest": reference_manifest("<Picture 1>")},
+            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use Picture 1.", "media_manifest": reference_manifest("<Picture 1>"), "repair_attempts": 1},
         }
 
         result = backend.generate(
@@ -853,7 +887,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
             "media_inputs": [
                 {"type": "image", "asset_id": "one", "reference": "<Picture 1>", "requires_capability": "images"},
             ],
-            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use both.", "media_manifest": reference_manifest("<Picture 1>", "<Picture 2>")},
+            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use both.", "media_manifest": reference_manifest("<Picture 1>", "<Picture 2>"), "repair_attempts": 1},
         }
         fake_messages = [
             {"role": "system", "content": "reference guide"},
@@ -882,7 +916,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
         assembled = {
             "messages": [{"role": "user", "content": "brief"}],
             "media_inputs": [{"type": "image", "requires_capability": "images"}],
-            "input": {"mode": "I2VA", "duration_seconds": 5, "creative_brief": "brief"},
+            "input": {"mode": "I2VA", "duration_seconds": 5, "creative_brief": "brief", "repair_attempts": 1},
         }
 
         with self.assertRaises(ModelError) as raised:

@@ -97,9 +97,10 @@ def system_prompt_for(
     nsfw: bool = True,
     story: bool = True,
     variant: str | None = None,
+    heat: int | None = None,
 ) -> str:
     target = target_for_mode(mode)
-    return target.system_prompt(mode, nsfw=nsfw, story=story, variant=variant)
+    return target.system_prompt(mode, nsfw=nsfw, story=story, variant=variant, heat=heat)
 
 
 def guide_ids_for_mode(mode: str) -> tuple[str, ...]:

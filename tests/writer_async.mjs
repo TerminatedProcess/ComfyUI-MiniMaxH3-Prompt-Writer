@@ -42,24 +42,84 @@ test("upload completion renders the current mode, including replacement", async 
   }
 });
 
-test("Clear everything does not clear another mode or newer input", async () => {
+test("Clear all clears the prompts before anything can be awaited", async () => {
+  // The reported bug: it snapshotted the boxes, awaited the media clear, and
+  // bailed if they had changed -- but the stage writes to those boxes during
+  // that window (it refills an empty brief from the session and restores a
+  // stored compiled prompt), so Clear all cleared the media and then said
+  // "your current prompts were kept because the workspace changed".
   for (const changeMode of [false, true]) {
     const pending = deferred();
     const studio = { mode: "Reference" };
     let fields = { brief: "old", prompt: "old", lyrics: "" };
+    const toasts = [];
     const api = controller(["clearEverything"], {
       studio, currentDraftFields: () => ({ ...fields }),
       clearCurrentMedia: () => pending.promise,
       clearCurrentPrompts: () => { fields = { brief: "", prompt: "" }; },
-      showToast() {},
+      showToast: (title) => toasts.push(title),
     });
     const operation = api.clearEverything();
+    assert.deepEqual(fields, { brief: "", prompt: "" }, "cleared before the media request was awaited");
+    // The stage repopulating the boxes mid-flight must not undo the clear.
+    fields = { brief: "restored by a render", prompt: "restored by a render", lyrics: "" };
+    // Clearing the media re-infers the mode by itself, so a mode change here is
+    // the clear's own side effect and must not abandon the session reset.
     if (changeMode) studio.mode = "I2VA";
-    fields = { brief: "new", prompt: "new", lyrics: "" };
     pending.resolve(true);
     await operation;
-    assert.equal(fields.prompt, "new");
+    assert.match(toasts.join(" "), /Everything cleared/);
   }
+});
+
+test("a reload puts the session's media back, and a new upload still wins", async () => {
+  for (const raced of [false, true]) {
+    const pending = deferred();
+    const studio = { sessionId: "s1", assets: [], mode: "Reference" };
+    const renders = [];
+    const api = controller(["restoreSessionMedia"], {
+      studio,
+      SESSION_MEDIA_MODE: "Reference",
+      getMediaManifest: () => pending.promise,
+      renderMedia: (mode) => renders.push(mode),
+      syncModeAvailability() {},
+    });
+    const operation = api.restoreSessionMedia();
+    // An upload that lands while the manifest is in flight is the newer truth.
+    if (raced) studio.assets = [{ id: "just-uploaded" }];
+    pending.resolve({ assets: [{ id: "stored" }] });
+    await operation;
+    assert.equal(studio.assets[0].id, raced ? "just-uploaded" : "stored");
+    assert.deepEqual(renders, raced ? [] : ["Reference"]);
+  }
+});
+
+test("Clear all resets the whole session instead of only the prompts", async () => {
+  const scopes = [];
+  // One request at a time, exactly like the stage: a second overlapping clear
+  // would be dropped -- which is how Clear all used to leave the brief, the
+  // goals and the conversation standing.
+  let busy = false;
+  const stage = { clear: async (options) => {
+    if (busy) return false;
+    busy = true;
+    scopes.push(options.scope);
+    await Promise.resolve();
+    busy = false;
+    return true;
+  } };
+  const fields = { brief: "old", prompt: "old", lyrics: "" };
+  const api = controller(["clearEverything", "clearCurrentPrompts"], {
+    studio: { mode: "Reference", stage, requestBusy: false, root: { querySelector: () => ({ value: "", textContent: "", hidden: false }) } },
+    currentDraftFields: () => ({ ...fields }),
+    clearPromptDraft: () => ({ brief: "", prompt: "" }),
+    currentBriefTextarea: () => ({ value: "" }),
+    clearCurrentMedia: async () => true,
+    toggleRefine() {}, promptLengthMeta: () => "", updateBriefLayout() {}, renderPromptHighlights() {},
+    syncModifiedState() {}, saveCurrentModeDraft() {}, showToast() {},
+  });
+  await api.clearEverything();
+  assert.deepEqual(scopes, ["all"]);
 });
 
 function refinementController(lyricsMode, pending) {

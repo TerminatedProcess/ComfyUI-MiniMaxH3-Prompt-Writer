@@ -48,6 +48,7 @@ export const resetSession = (payload) => post("/session/reset", payload);
 export const buildGeneric = (payload) => post("/generic/build", payload);
 export const sendGenericTurn = (payload) => post("/generic/turn", payload);
 export const expandBrief = (payload) => post("/generic/expand", payload);
+export const describeAsset = (payload) => post("/generic/describe", payload);
 export const editGenericField = (payload) => post("/generic/field", payload);
 export const changeGoal = (payload) => post("/goals", payload);
 export const assemble = (payload) => post("/assemble", payload);

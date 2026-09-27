@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .. import heat as heat_levels
+
 from ..prompt_audit import audit_prompt, camera_structure_requested
 from ..prompt_repair import (
     audit_failures,
@@ -78,7 +80,9 @@ MODE_PROFILE = {
 REFERENCE_LIMITS = {"image": 9, "video": 3, "audio": 3, "total": 12}
 
 
-def video_system_prompt(mode: str, *, nsfw: bool = True, story: bool = True, variant: str | None = None) -> str:
+def video_system_prompt(
+    mode: str, *, nsfw: bool = True, story: bool = True, variant: str | None = None, heat: int | None = None,
+) -> str:
     base = REFERENCE_SYSTEM_WRAPPER if mode == "Reference" else SYSTEM_WRAPPER
     remove: tuple[str, ...] = ()
     add: list[str] = []
@@ -90,20 +94,27 @@ def video_system_prompt(mode: str, *, nsfw: bool = True, story: bool = True, var
         else:
             remove = (STANDARD_NO_INVENTION,)
             add.append(STORY_VIDEO)
-    if nsfw:
-        add.append(NSFW_PERMITTED)
+    level = heat_levels.resolve(heat=heat, nsfw=nsfw)
+    if level != heat_levels.CLEAN:
+        add.append(heat_levels.clause(level))
     return compose(base, remove=remove, add=tuple(add))
 
 
-def music_system_prompt(mode: str, *, nsfw: bool = True, story: bool = True, variant: str | None = None) -> str:
+def music_system_prompt(
+    mode: str, *, nsfw: bool = True, story: bool = True, variant: str | None = None, heat: int | None = None,
+) -> str:
+    level = heat_levels.resolve(heat=heat, nsfw=nsfw)
     if mode == "Music3Lyrics":
-        return compose(MUSIC3_LYRICS_SYSTEM_WRAPPER, add=(NSFW_PERMITTED,) if nsfw else ())
+        return compose(
+            MUSIC3_LYRICS_SYSTEM_WRAPPER,
+            add=() if level == heat_levels.CLEAN else (heat_levels.clause(level),),
+        )
     remove = (MUSIC3_NO_INVENTION,) if story else ()
     add: list[str] = []
     if story:
         add.append(STORY_MUSIC)
-    if nsfw:
-        add.append(NSFW_PERMITTED)
+    if level != heat_levels.CLEAN:
+        add.append(heat_levels.clause(level))
     return compose(MUSIC3_SYSTEM_WRAPPER, remove=remove, add=tuple(add))
 
 

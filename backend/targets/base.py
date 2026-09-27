@@ -139,6 +139,40 @@ def compose(base: str, *, remove: tuple[str, ...] = (), add: tuple[str, ...] = (
     return text.strip()
 
 
+# Fields a still image cannot carry, whatever the document says. Measured: a
+# Krea 2 compile was failed and repaired three times for "Soundscape must be:
+# Silent" -- a sound fact demanded of a picture -- and for exclusions, which
+# belong in the negative prompt rather than described in the positive one.
+_SOUND_FIELDS = frozenset({"dialogue", "soundscape", "music"})
+# "exclusions" is the one field whose words must NOT appear. The token audit
+# asks the opposite question -- it demanded that "No visible props, furniture,
+# or scenery" be *present* in the prose, and then reported the failure as
+# "Must not appear must be: No visible props", which is not even a sentence.
+# It is checked as a judged goal instead, where a negative can be answered.
+
+
+def _auditable(key: str, assembled: dict[str, Any]) -> bool:
+    """Whether this target's output can carry that fact at all.
+
+    An audit that demands the impossible is not strictness, it is a loop: the
+    repair cannot fix it either, so every attempt is spent and the user is told
+    the prompt failed something it could never have contained.
+    """
+    from .. import generic
+    from . import target_for_mode, TargetError
+
+    field = (generic.split_key(key) or (key, 1))[0]
+    try:
+        target = target_for_mode((assembled.get("input") or {}).get("mode"))
+    except (TargetError, Exception):
+        return True
+    if target.workspace == "image" and field in _SOUND_FIELDS:
+        return False
+    if field == "exclusions":
+        return False
+    return True
+
+
 def shared_checks(assembled: dict[str, Any], prompt: str) -> dict[str, Any]:
     """Checks every target owes the user, whatever shape its output takes.
 
@@ -155,17 +189,23 @@ def shared_checks(assembled: dict[str, Any], prompt: str) -> dict[str, Any]:
     failures: list[str] = []
 
     if isinstance(doc, dict):
-        missing = generic.lock_violations(doc, prompt)
+        missing = [key for key in generic.lock_violations(doc, prompt) if _auditable(key, assembled)]
         result["lock_violations"] = list(missing)
+        missing = tuple(missing)
         result["lock_expected"] = generic.lock_expected(doc, missing)
         for key in missing:
             value = result["lock_expected"].get(key)
-            label = generic.LABELS.get(key, key)
+            label = generic.label_for(key)
             failures.append(
                 f"dropped an established fact from the generic prompt - {label} must be: {value}"
                 if value else f"dropped an established fact from the generic prompt: {label}"
             )
 
+    # Locked relations ride along as ephemeral judged goals: a relation is a
+    # yes/no about the finished prompt, which is what the verifier does, and it
+    # is the one thing token overlap provably cannot check.
+    derived = doc if isinstance(doc, dict) else None
+    ledger = [*ledger, *goal_ledger.from_edges(derived), *goal_ledger.from_exclusions(derived)]
     if ledger:
         evaluated, violations, pending = goal_ledger.evaluate(ledger, doc if isinstance(doc, dict) else None, prompt)
         result["goals"] = evaluated

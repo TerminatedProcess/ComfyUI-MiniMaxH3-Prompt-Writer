@@ -98,7 +98,24 @@ def create_app(settings: Settings) -> web.Application:
     upstream_routes.GGUF_BACKEND = managed_backend
     upstream_routes.BACKENDS["gguf"] = managed_backend
 
-    app = web.Application(client_max_size=MAX_REQUEST_BYTES)
+    @web.middleware
+    async def revalidate_static(request: web.Request, handler):
+        """Make the browser re-check the web assets every load.
+
+        These are served straight from the repo's `web/` directory, so they
+        change under a running server. aiohttp sends Last-Modified but no
+        Cache-Control, which lets the browser apply heuristic freshness and
+        keep a stale stylesheet or module for minutes -- an edit then "did
+        nothing" until a hard refresh, which is a trap when the file on disk is
+        the source of truth. `no-cache` still allows a cached copy, it just has
+        to revalidate first, so this costs one 304 per file.
+        """
+        response = await handler(request)
+        if not request.path.startswith(("/h3studio/", "/standalone/")):
+            response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+    app = web.Application(client_max_size=MAX_REQUEST_BYTES, middlewares=[revalidate_static])
     app[SETTINGS_KEY] = settings
     app[VERSION_KEY] = VERSION
     app[MANAGED_CONTROLLER_KEY] = controller

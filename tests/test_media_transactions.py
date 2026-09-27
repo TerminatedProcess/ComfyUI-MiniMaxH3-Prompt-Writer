@@ -26,6 +26,51 @@ class MediaTransactionTests(unittest.TestCase):
             "_original_path": str(original),
         }
 
+    def test_media_survives_a_restart(self):
+        """The bug behind "my media disappears when I refresh".
+
+        The cache was wiped at import and the manifest lived only in memory, so
+        every restart left a session whose brief, document and goals came back
+        pointing at pictures the studio could no longer see.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(media, "CACHE_ROOT", root):
+                store = media.MediaStore()
+                store.sessions["session"] = [self.asset(root, "a1", "Reference", "image", "<Picture 1>")]
+                store._save("session")
+
+                # A new process: nothing in memory, the files still on disk.
+                restarted = media.MediaStore()
+                self.assertEqual([item["id"] for item in restarted.list("session")], ["a1"])
+                self.assertEqual(restarted.manifest("session", "Reference")["assets"][0]["reference"], "<Picture 1>")
+
+    def test_a_restart_does_not_resurrect_media_whose_files_are_gone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(media, "CACHE_ROOT", root):
+                store = media.MediaStore()
+                asset = self.asset(root, "a1", "Reference", "image", "<Picture 1>")
+                store.sessions["session"] = [asset]
+                store._save("session")
+                Path(asset["_original_path"]).unlink()
+
+                restarted = media.MediaStore()
+                self.assertEqual(restarted.list("session"), [], "a manifest is not evidence the file exists")
+
+    def test_pruning_keeps_recent_sessions_and_drops_stale_ones(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(media, "CACHE_ROOT", root):
+                fresh, stale = root / "fresh", root / "stale"
+                fresh.mkdir(); stale.mkdir()
+                import os
+                old = media.time.time() - (media.STALE_MEDIA_SECONDS + 60)
+                os.utime(stale, (old, old))
+                removed = media._prune_cache()
+                self.assertEqual([path.name for path in removed], ["stale"])
+                self.assertTrue(fresh.exists())
+
     def test_clear_mode_preserves_other_mode_assets_and_removes_only_target_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

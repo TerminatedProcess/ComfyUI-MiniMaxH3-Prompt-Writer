@@ -119,6 +119,61 @@ class SessionStoreTests(unittest.TestCase):
             state["generic"]["updated_at"],
         )
 
+    def _audit(self, *, locks=(), unmet=0):
+        return {
+            "lock_violations": list(locks),
+            "goals": [{"enabled": True, "verdict": "unmet"} for _ in range(unmet)],
+        }
+
+    def test_the_best_draft_for_a_target_survives_a_worse_regeneration(self):
+        """Pressing Generate again is an independent draft, so it can come out
+        worse. Before this the better one was simply gone."""
+        state = session_store.load(SESSION)
+        session_store.record_output(state, "Krea2", prompt="the good one", audit=self._audit(unmet=1))
+        session_store.record_output(state, "Krea2", prompt="the worse one", audit=self._audit(unmet=3))
+        session_store.save(state)
+
+        restored = session_store.load(SESSION)
+        self.assertEqual(restored["outputs"]["Krea2"]["prompt"], "the worse one", "the latest is still the current")
+        self.assertEqual(restored["outputs"]["Krea2"]["best"]["prompt"], "the good one")
+
+    def test_a_better_draft_replaces_the_best(self):
+        state = session_store.load(SESSION)
+        session_store.record_output(state, "Krea2", prompt="two unmet", audit=self._audit(unmet=2))
+        session_store.record_output(state, "Krea2", prompt="one unmet", audit=self._audit(unmet=1))
+        self.assertEqual(state["outputs"]["Krea2"]["best"]["prompt"], "one unmet")
+
+    def test_a_dropped_fact_outranks_any_number_of_unmet_goals(self):
+        state = session_store.load(SESSION)
+        session_store.record_output(state, "Krea2", prompt="four unmet", audit=self._audit(unmet=4))
+        session_store.record_output(state, "Krea2", prompt="one dropped fact", audit=self._audit(locks=["wardrobe"]))
+        self.assertEqual(
+            state["outputs"]["Krea2"]["best"]["prompt"], "four unmet",
+            "losing a fact the user established is worse than any unmet goal",
+        )
+
+    def test_the_best_resets_when_the_document_moves_on(self):
+        """An older draft is not a better answer to a question nobody asked."""
+        state = session_store.load(SESSION)
+        session_store.record_output(state, "Krea2", prompt="clean, old document", audit=self._audit())
+        state["generic"] = generic.set_field(state["generic"], "subject", "Bob", generic.ORIGIN_USER)
+        session_store.record_output(state, "Krea2", prompt="worse, new document", audit=self._audit(unmet=2))
+        self.assertEqual(state["outputs"]["Krea2"]["best"]["prompt"], "worse, new document")
+
+    def test_the_best_does_not_nest_itself(self):
+        state = session_store.load(SESSION)
+        for index in range(4):
+            session_store.record_output(state, "Krea2", prompt=f"draft {index}", audit=self._audit(unmet=index))
+        self.assertNotIn("best", state["outputs"]["Krea2"]["best"], "a best-of-a-best would grow on every compile")
+
+    def test_an_unaudited_draft_never_displaces_an_audited_best(self):
+        """An empty audit is not a clean one -- scoring it would let a draft that
+        was never checked beat every checked draft forever."""
+        state = session_store.load(SESSION)
+        session_store.record_output(state, "Krea2", prompt="checked, one unmet", audit=self._audit(unmet=1))
+        session_store.record_output(state, "Krea2", prompt="never checked")
+        self.assertEqual(state["outputs"]["Krea2"]["best"]["prompt"], "checked, one unmet")
+
     def test_conversation_is_capped_without_losing_the_latest(self):
         state = session_store.load(SESSION)
         for index in range(session_store.MAX_CONVERSATION_TURNS + 20):

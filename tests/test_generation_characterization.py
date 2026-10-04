@@ -520,8 +520,10 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 "reserved_output_tokens", "debug_input_sequence",
                 "thinking_fallback", "thinking_attempt_tokens", "reasoning_tokens",
                 "primary_finish_reason", "format_repair_attempted",
-                # How many corrections were spent, and how many the user allowed.
+                # How many corrections were spent, how many the user allowed, and
+                # which draft was handed back -- 0 for the model's first.
                 "format_repair_attempts", "format_repair_allowed",
+                "format_repair_best_attempt",
                 "format_repair_applied", "format_repair_reason",
                 "format_repair_failure", "format_repair_method",
                 "format_repair_multimodal", "format_repair_tokens", "seed", "cold_start",

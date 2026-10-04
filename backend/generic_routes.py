@@ -387,7 +387,7 @@ def register_generic_routes(routes, services) -> None:
             changed = tuple(dict.fromkeys((*changed, "pose")))
         # Anything the user changed while the model was working stays changed.
         state = session_store.merge_after_await(session_id, state, "generic", "goals", "conversation")
-        state["generic"] = updated
+        state["generic"] = generic.ensure_names(updated, seed=session_id)
         session_store.record_turn(
             state,
             "assistant",
@@ -445,6 +445,26 @@ def register_generic_routes(routes, services) -> None:
             state, session_id, brief=expanded, previous_brief=brief,
             heat=level, heat_label=heat_levels.label(level),
         )
+
+    @routes.post(f"{prefix}/generic/name")
+    async def rename_person(request: web.Request) -> web.Response:
+        """Rename one person. The handle is the user's, not the model's."""
+        body = await services._json_body(request) or {}
+        try:
+            session_id = _session_id(body)
+        except session_store.SessionStoreError as err:
+            return error(err)
+        raw = body.get("person")
+        try:
+            index = int(raw)
+        except (TypeError, ValueError):
+            return services._error("INVALID_REQUEST", "A person number is required.", status=400)
+        state = session_store.load(session_id)
+        try:
+            state["generic"] = generic.set_name(state["generic"], index, str(body.get("name") or ""))
+        except generic.GenericError as err:
+            return error(err)
+        return _state_response(state, session_id)
 
     @routes.post(f"{prefix}/generic/describe")
     async def describe_asset(request: web.Request) -> web.Response:
@@ -562,7 +582,7 @@ def register_generic_routes(routes, services) -> None:
             session_store.save(state)
             return error(err, status=502)
         state = session_store.merge_after_await(session_id, state, "conversation")
-        state["generic"] = outcome["generic"]
+        state["generic"] = generic.ensure_names(outcome["generic"], seed=session_id)
         state["goals"] = outcome["goals"]
         session_store.record_turn(
             state,
@@ -606,6 +626,8 @@ def register_generic_routes(routes, services) -> None:
                 )
         except generic.GenericError as err:
             return error(err)
+        # An inline edit can introduce a person who was not there before.
+        state["generic"] = generic.ensure_names(state["generic"], seed=session_id)
         return _state_response(state, session_id, changed=list(changed))
 
     @routes.post(f"{prefix}/goals")

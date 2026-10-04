@@ -248,7 +248,8 @@ def _named(doc: dict[str, Any], endpoint: str) -> str:
     if not index:
         return endpoint
     value = generic.record(doc, generic.person_key("subject", index))["value"]
-    return f"{value} ({endpoint})" if value else f"person {endpoint}"
+    who = generic.names(doc).get(index) or f"person {endpoint}"
+    return f"{value} ({who})" if value else who
 
 
 def _field_verdict(goal: dict[str, Any], doc: dict[str, Any]) -> tuple[bool, str]:

@@ -195,7 +195,7 @@ def shared_checks(assembled: dict[str, Any], prompt: str) -> dict[str, Any]:
         result["lock_expected"] = generic.lock_expected(doc, missing)
         for key in missing:
             value = result["lock_expected"].get(key)
-            label = generic.label_for(key)
+            label = generic.label_for(key, doc)
             failures.append(
                 f"dropped an established fact from the generic prompt - {label} must be: {value}"
                 if value else f"dropped an established fact from the generic prompt: {label}"

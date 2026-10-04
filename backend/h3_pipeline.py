@@ -11,7 +11,7 @@ from .context import (
     non_thinking_output_tokens,
     repair_attempt_budget,
 )
-from . import goals as goal_ledger
+from . import goals as goal_ledger, prompt_audit
 from .media import STORE, MediaError
 from .models.contract import ModelError, final_message_text
 from .targets import TargetError, mode_limits, target_for_mode
@@ -377,6 +377,13 @@ def run_h3_pipeline(
     # locked fact and an unmet goal all reach the same repair loop.
     original_prompt = prompt
     original_audit = initial_audit
+    # Every draft the loop produces, with how bad its audit was. The index keeps
+    # the comparison stable so a tie goes to the EARLIER draft -- and the first
+    # draft is index 0, which is what preserves the old behaviour whenever no
+    # repair actually improved anything.
+    candidates: list[tuple[tuple[int, int, int, int], int, str, dict[str, Any]]] = [
+        (prompt_audit.severity(initial_audit), 0, prompt, initial_audit)
+    ]
     repair_plan: dict[str, Any] = {}
     while initial_audit.get("repair_required") is True and format_repair_attempts < allowed_attempts:
         format_repair_attempted = True
@@ -437,6 +444,9 @@ def run_h3_pipeline(
         # an unmet goal was accepted without anyone checking it fixed that goal,
         # and the user saw "could not be verified".
         goal_verification_tokens += verify_pending_goals(initial_audit, prompt)
+        candidates.append(
+            (prompt_audit.severity(initial_audit), format_repair_attempts, prompt, initial_audit)
+        )
         if initial_audit.get("repair_required") is not True:
             format_repair_applied = True
             format_repair_failure = None
@@ -445,11 +455,32 @@ def run_h3_pipeline(
             "the corrected draft still failed: "
             + ", ".join(initial_audit.get("shared_failures") or ["an unmet goal"])
         )
+    format_repair_best_attempt = format_repair_attempts if format_repair_applied else 0
     if format_repair_attempted and not format_repair_applied:
-        # Hand back what the model wrote itself rather than a spliced draft that
-        # failed too -- and the audit that actually describes it.
-        prompt = original_prompt
-        initial_audit = original_audit
+        # No draft passed, so hand back the LEAST bad one rather than always the
+        # first. This used to revert to the first draft unconditionally, which
+        # threw away passes that had fixed real problems and -- because the audit
+        # was reverted with it -- reported the first draft's counts, so spending
+        # more corrections never made the numbers go down.
+        #
+        # A tie still goes to the first draft, which is the original intent:
+        # prefer what the model wrote in one piece over a corrected draft that
+        # is no better.
+        _, format_repair_best_attempt, prompt, initial_audit = min(
+            candidates, key=lambda candidate: (candidate[0], candidate[1])
+        )
+        # Re-describe the failure only when the draft chosen is NOT the one the
+        # current message is about, which is the case only if the last pass was
+        # accepted and re-audited (so the message is a "still failed") and a
+        # different draft won. A rejection reason -- an empty repair, a truncated
+        # one, a correction that touched the reference inventory -- explains why
+        # there is nothing better to show and must survive untouched.
+        last_pass_was_audited = candidates[-1][1] == format_repair_attempts
+        if last_pass_was_audited and format_repair_best_attempt != format_repair_attempts:
+            format_repair_failure = (
+                "the corrected draft still failed: "
+                + ", ".join(initial_audit.get("shared_failures") or ["an unmet goal"])
+            )
 
     generation_seconds = time.perf_counter() - generation_started
     output_tokens = int(usage.get("completion_tokens", 0))
@@ -476,6 +507,9 @@ def run_h3_pipeline(
         "format_repair_attempted": format_repair_attempted,
         "format_repair_attempts": format_repair_attempts,
         "format_repair_allowed": allowed_attempts,
+        # Which draft is being handed back: 0 is the model's first, N is the Nth
+        # correction. The studio needs it to say "best of 3" honestly.
+        "format_repair_best_attempt": format_repair_best_attempt,
         "format_repair_applied": format_repair_applied,
         "format_repair_reason": format_repair_reason,
         "format_repair_failure": format_repair_failure,

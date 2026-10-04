@@ -27,8 +27,8 @@ import requests
 
 HUB_DB = "/mnt/llm/hub/hubmodels/hubrootv3.db"
 SIDECAR_DB_DEFAULT = ".lab/lora_meta.db"
-LLM_URL = "http://127.0.0.1:8890/v1/chat/completions"
-LLM_MODEL = "qwen3-vl-8b-abliterated"
+LLM_URL = "http://127.0.0.1:8892/v1/chat/completions"
+LLM_MODEL = "local"  # gateway serves whichever engine is up; this field is ignored
 LLM_TIMEOUT = 60
 
 SYSTEM_PROMPT = (

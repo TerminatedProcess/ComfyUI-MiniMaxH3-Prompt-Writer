@@ -104,8 +104,15 @@ class EnforcementTests(unittest.TestCase):
         self.assertEqual(len(derived), 1, "only the locked one is enforced")
         goal = derived[0]
         self.assertEqual(goal["kind"], goals.KIND_JUDGED)
-        self.assertIn("a brunette (B)", goal["text"])
-        self.assertIn("a blonde woman (A)", goal["text"])
+        self.assertIn("a brunette (person B)", goal["text"])
+        self.assertIn("a blonde woman (person A)", goal["text"])
+
+    def test_a_named_person_is_checked_by_name(self):
+        doc = generic.ensure_names(self.doc(), seed="session-1")
+        named = generic.names(doc)
+        goal = goals.from_edges(doc)[0]
+        self.assertIn(named[1], goal["text"])
+        self.assertIn(named[2], goal["text"])
         self.assertIn("across her lap", goal["text"])
 
     def test_the_compile_checks_relations_without_them_being_stored_goals(self):

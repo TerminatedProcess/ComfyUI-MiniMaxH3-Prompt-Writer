@@ -175,32 +175,109 @@ def doc_fields(doc: dict[str, Any]) -> tuple[str, ...]:
     return tuple(sorted(keys, key=sort_key))
 
 
-def label_for(key: str) -> str:
-    """"Wardrobe", or "Wardrobe (B)" -- an audit message must say whose."""
+def label_for(key: str, doc: dict[str, Any] | None = None) -> str:
+    """"Wardrobe", or "Wardrobe (Bob)" -- an audit message must say whose."""
     parsed = split_key(key)
     if not parsed:
         return key
     field, index = parsed
     label = LABELS[field]
-    return label if index == 1 else f"{label} ({person_letter(index)})"
+    who = names(doc or {}).get(index) or (person_letter(index) if index > 1 else "")
+    return f"{label} ({who})" if who else label
 
 
 def doc_labels(doc: dict[str, Any]) -> dict[str, str]:
-    return {key: label_for(key) for key in doc_fields(doc)}
+    return {key: label_for(key, doc) for key in doc_fields(doc)}
 
 
 def doc_groups(doc: dict[str, Any]) -> tuple[tuple[str, tuple[str, ...]], ...]:
     """The render/UI grouping: one block per person, then the scene groups."""
     indices = people(doc)
     blocks: list[tuple[str, tuple[str, ...]]] = []
+    named = names(doc)
     for index in indices:
-        title = "Subject" if len(indices) == 1 else f"Subject {person_letter(index)}"
+        if index in named:
+            title = person_display(doc, index)
+        else:
+            title = "Subject" if len(indices) == 1 else f"Subject {person_letter(index)}"
         blocks.append((title, tuple(person_key(field, index) for field in PERSON_FIELDS)))
     for title, keys in GROUPS:
         rest = tuple(key for key in keys if key not in PERSON_FIELDS)
         if rest:
             blocks.append((title, rest))
     return tuple(blocks)
+
+
+MAX_NAME_CHARS = 40
+
+
+def names(doc: dict[str, Any]) -> dict[int, str]:
+    """Each person's handle, by index. A handle is not a fact about the shot."""
+    raw = (doc or {}).get("names")
+    if not isinstance(raw, dict):
+        return {}
+    found: dict[int, str] = {}
+    for key, value in raw.items():
+        try:
+            index = int(key)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= index <= MAX_PEOPLE and isinstance(value, str) and value.strip():
+            found[index] = value.strip()[:MAX_NAME_CHARS]
+    return found
+
+
+def person_display(doc: dict[str, Any], index: int) -> str:
+    """"Liz (A)" once she has a name, "Subject A" before that."""
+    name = names(doc).get(index)
+    letter = person_letter(index)
+    return f"{name} ({letter})" if name else f"Subject {letter}"
+
+
+def set_name(doc: dict[str, Any], index: int, name: str) -> dict[str, Any]:
+    if not 1 <= index <= MAX_PEOPLE:
+        raise GenericError("UNKNOWN_FIELD", f"There is no person {index}.")
+    text = normalize_unicode_text(name or "").strip()[:MAX_NAME_CHARS]
+    stored = {str(key): value for key, value in names(doc).items()}
+    if text:
+        stored[str(index)] = text
+    else:
+        stored.pop(str(index), None)
+    return validate({**doc, "schema": SCHEMA, "names": stored, "updated_at": time.time()})
+
+
+def ensure_names(doc: dict[str, Any], *, seed: str) -> dict[str, Any]:
+    """Give every person in the document a handle, once.
+
+    Assigned rather than asked for: the model is describing a picture, not
+    casting it, and a handle the user can say out loud ("make Liz's dress red")
+    is worth more than one more field to fill. Stable by construction -- the
+    same session and the same person get the same name, so the conversation
+    history keeps pointing at the same body after a rebuild.
+    """
+    from . import person_names
+
+    existing = names(doc)
+    assigned = dict(existing)
+    for index in people(doc):
+        if index in assigned:
+            continue
+        described = " ".join(
+            record(doc, person_key(field, index))["value"]
+            for field in ("subject", "appearance", "wardrobe")
+        ).strip()
+        if not described:
+            continue  # nobody there yet; naming an empty slot means nothing
+        assigned[index] = person_names.choose(
+            described, seed=seed, index=index, taken=set(assigned.values()),
+        )
+    if assigned == existing:
+        return doc
+    return validate({
+        **doc, "schema": SCHEMA,
+        "names": {str(index): name for index, name in sorted(assigned.items())},
+        "updated_at": time.time(),
+    })
 
 
 ORIGIN_UNSPECIFIED = "unspecified"
@@ -374,6 +451,13 @@ def validate(doc: Any) -> dict[str, Any]:
         observed = record.get("observed")
         if observed is not None:
             _clean(observed, key)
+    raw_names = doc.get("names")
+    if raw_names is not None:
+        if not isinstance(raw_names, dict):
+            raise GenericError("INVALID_DOC", "The names must be an object.")
+        for key, value in raw_names.items():
+            if not isinstance(value, str) or len(value) > MAX_NAME_CHARS:
+                raise GenericError("INVALID_DOC", f"Name for person {key} is not usable.")
     raw_edges = doc.get("edges")
     if raw_edges is not None:
         if not isinstance(raw_edges, list):
@@ -526,6 +610,17 @@ def render(doc: dict[str, Any]) -> str:
     relations = render_relations(doc)
     if relations:
         blocks.append(f"Relations\n{relations}")
+    given = names(doc)
+    if given:
+        # The names exist so a person and a model can refer to one body without
+        # ambiguity. They are not in the picture: a prompt model has never met
+        # Liz, the name carries no visual information, and a recognisable one
+        # drags the render toward whoever it thinks she is.
+        blocks.append(
+            f"About the names\n{', '.join(sorted(given.values()))} are labels for these people, not part of the "
+            "scene. Never write a label in the prompt: describe the person instead, and repeat enough of their "
+            "description to keep them apart wherever a pronoun would be ambiguous."
+        )
     return "\n\n".join(blocks)
 
 

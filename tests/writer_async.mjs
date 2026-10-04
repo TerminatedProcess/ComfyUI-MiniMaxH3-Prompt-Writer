@@ -143,6 +143,9 @@ function refinementController(lyricsMode, pending) {
   const api = controller([lyricsMode ? "submitLyricsRefinement" : "submitRefinement"], {
     studio, prepareWriterRequest: async () => true, generationModeIsAvailable: () => true,
     markActiveWriterRequest() {}, clearActiveWriterRequest() {}, setGenerationState() {},
+    // The busy button says what the click will do -- stop, or restart with the
+    // inputs you just corrected.
+    syncBusyGenerateLabel() {}, generationRestartWanted: () => false,
     vramHandoffCoordinator: { trackWriterRequest: (promise) => promise },
     refine: () => { started.resolve(); return pending.promise; },
     buildRefinePayload: () => ({}), buildLyricsRefinePayload: () => ({}),
@@ -397,4 +400,64 @@ test("discovery probe cannot restore the model selected before a newer selection
   pending.resolve({ model: { id: "external" } });
   await operation;
   assert.equal(api.studio.selectedModel.id, "new");
+});
+
+test("a second click with edited inputs restarts instead of only stopping", async () => {
+  // The reported flow: press Generate, notice the duration is wrong, fix it,
+  // press again. The run in flight is abandoned and a fresh one takes its place.
+  const cancels = [];
+  const api = controller(["startGenerationPreview"], {
+    studio: { requestBusy: true, activeRequestFingerprint: "duration=5" },
+    generationRestartWanted: () => true,
+    setGenerationState() {},
+    cancel: async () => { cancels.push("cancelled"); },
+    generate: () => assert.fail("the new run must wait for this one to unwind"),
+  });
+  await api.startGenerationPreview();
+  assert.deepEqual(cancels, ["cancelled"]);
+  assert.equal(api.studio.restartAfterCancel, true, "the restart is armed for the finally block");
+});
+
+test("a second click with untouched inputs still just stops", async () => {
+  const api = controller(["startGenerationPreview"], {
+    studio: { requestBusy: true, activeRequestFingerprint: "duration=5" },
+    generationRestartWanted: () => false,
+    setGenerationState() {},
+    cancel: async () => {},
+  });
+  await api.startGenerationPreview();
+  assert.equal(api.studio.restartAfterCancel, false, "stop must stay reachable; it is the only control that stops a run");
+});
+
+test("a restart is wanted only when the request itself changed", () => {
+  const api = controller(["generationRestartWanted"], {
+    studio: { requestBusy: true, activeRequestFingerprint: "duration=5" },
+    generationRequestFingerprint: () => "duration=10",
+  });
+  assert.equal(api.generationRestartWanted(), true);
+
+  const same = controller(["generationRestartWanted"], {
+    studio: { requestBusy: true, activeRequestFingerprint: "duration=5" },
+    generationRequestFingerprint: () => "duration=5",
+  });
+  assert.equal(same.generationRestartWanted(), false, "a new seed alone is not an edit");
+
+  // Refinement never fingerprints its request, so its runs only ever stop.
+  const refining = controller(["generationRestartWanted"], {
+    studio: { requestBusy: true, activeRequestFingerprint: null },
+    generationRequestFingerprint: () => "anything",
+  });
+  assert.equal(refining.generationRestartWanted(), false);
+});
+
+test("the busy button says which of the two things the click will do", () => {
+  for (const [restart, expected] of [[true, "Generating, click to restart"], [false, "Generating, click to stop"]]) {
+    const label = { textContent: "" };
+    const api = controller(["syncBusyGenerateLabel"], {
+      studio: { requestBusy: true, root: { querySelector: (s) => s === "[data-generate] [data-generate-label]" ? label : null } },
+      generationRestartWanted: () => restart,
+    });
+    api.syncBusyGenerateLabel();
+    assert.equal(label.textContent, expected);
+  }
 });

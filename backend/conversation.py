@@ -334,6 +334,26 @@ def turn_instructions(*, nsfw: bool = True, story: bool, heat: int | None = None
     return "\n\n".join(parts)
 
 
+def _named_people(doc: dict[str, Any] | None) -> str:
+    """Who the letters already are, so a rebuild keeps them the same person."""
+    if not isinstance(doc, dict):
+        return ""
+    given = generic.names(doc)
+    if not given:
+        return ""
+    roll = ", ".join(
+        f"{generic.person_letter(index)} is {name}"
+        + (f" ({generic.record(doc, generic.person_key('subject', index))['value']})"
+           if generic.record(doc, generic.person_key("subject", index))["value"] else "")
+        for index, name in sorted(given.items())
+    )
+    return (
+        f"\n\nThese people already have names: {roll}. Keep each of them in the same position in \"people\" so "
+        "the name still belongs to the same body, and use the name when a field or a relation has to say which "
+        "person it means."
+    )
+
+
 def assemble_build(
     *,
     session_id: str,
@@ -370,6 +390,7 @@ def assemble_build(
         f"Reference media:\n{references}\n\n"
         f"Brief:\n{brief or 'None given; build the scene from the reference media.'}"
         + existing
+        + _named_people(doc)
         + goal_block
     )
     return {
@@ -711,6 +732,7 @@ def assemble_turn(
         f"Reference media {'attached to this message' if media_inputs else '(none loaded)'}:\n{references}\n\n"
         + (f"Standing goals:\n{standing}\n\n" if standing else "")
         + (("Recent conversation:\n" + "\n".join(history) + "\n\n") if history else "")
+        + (_named_people(doc).strip() + "\n\n" if _named_people(doc) else "")
         + f"User says:\n{message}"
     )
     return {

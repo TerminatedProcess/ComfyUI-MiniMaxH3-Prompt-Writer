@@ -31,7 +31,7 @@ from .system_prompts import SystemPromptError, system_prompt_for_mode
 from .version import VERSION
 from .sequence_routes import register_sequence_routes
 from .generic_routes import register_generic_routes
-from . import goals as goal_ledger, session_store
+from . import goals as goal_ledger, prompt_audit, session_store
 from .targets import TargetError, generation_modes, guide_ids_for_mode, profile_for_mode
 
 
@@ -138,6 +138,35 @@ async def _run_thread_worker(
 def _propagate_worker_cancellation(cancellation: asyncio.CancelledError | None) -> None:
     if cancellation is not None:
         raise cancellation
+
+
+def _best_so_far_summary(
+    state: dict[str, Any], mode: str, result: dict[str, Any]
+) -> dict[str, Any]:
+    """How the draft just made compares with the best this target has managed.
+
+    The prompt itself only travels when this draft is NOT the best, because that
+    is the only case where the studio has something to offer: regenerating is an
+    independent draft, so the counts can come out worse, and before this the
+    better one was simply gone.
+    """
+    best = ((state.get("outputs") or {}).get(mode) or {}).get("best")
+    if not isinstance(best, dict) or not best.get("prompt"):
+        # Nothing to compare against, so there is nothing to offer. An absent
+        # best must not be read as a clean audit: that made the very first draft
+        # of a session look like a regression from a prompt that never existed.
+        return {"is_best": True, "unmet_goals": 0, "dropped_facts": 0}
+    best_audit = best.get("audit") or {}
+    is_best = prompt_audit.severity(result.get("prompt_audit")) <= prompt_audit.severity(best_audit)
+    summary = {
+        "is_best": is_best,
+        "unmet_goals": prompt_audit.unmet_goal_count(best_audit),
+        "dropped_facts": len(best_audit.get("lock_violations") or []),
+    }
+    if not is_best:
+        summary["prompt"] = best.get("prompt") or ""
+        summary["negative_prompt"] = best.get("negative_prompt") or ""
+    return summary
 
 
 async def _cleanup_expired_state(*, now: float | None = None) -> None:
@@ -808,6 +837,10 @@ async def generate(request: web.Request) -> web.Response:
                     # user's ledger by every relation, every time.
                     state["goals"] = goal_ledger.without_derived(result["goals"])
                 session_store.save(state)
+                # Whether this draft is the best this target has managed for the
+                # current document, so the studio can offer the better one back
+                # instead of leaving the user to notice the counts went up.
+                result["best_so_far"] = _best_so_far_summary(state, body["mode"], result)
             except (session_store.SessionStoreError, OSError) as error:
                 # Persistence is a convenience here; never fail a finished
                 # generation because the state file could not be written.

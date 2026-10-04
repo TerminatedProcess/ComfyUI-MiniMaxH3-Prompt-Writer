@@ -90,6 +90,64 @@ class DocumentTests(unittest.TestCase):
             generic.apply_patch(generic.new_doc(), {"subject#99": "a crowd"}, source=generic.SOURCE_USER)
 
 
+class NameTests(unittest.TestCase):
+    """People get a handle a person can say out loud.
+
+    "B's wardrobe" is a database row; "Bob's tights" is a sentence. The letters
+    stay the machine's handle -- relations and the audit use them -- but the
+    name is what the user and the model talk in.
+    """
+
+    def peopled(self):
+        doc = generic.new_doc()
+        doc = generic.set_field(doc, "subject", "a woman with curled brown hair", generic.ORIGIN_ASSET)
+        doc = generic.set_field(doc, "subject#2", "a man in his 30s", generic.ORIGIN_ASSET)
+        return generic.ensure_names(doc, seed="session-1")
+
+    def test_a_woman_and_a_man_get_names_that_fit(self):
+        from backend import person_names
+        given = generic.names(self.peopled())
+        self.assertIn(given[1], person_names.FEMININE)
+        self.assertIn(given[2], person_names.MASCULINE)
+
+    def test_an_unreadable_description_takes_a_neutral_name(self):
+        """A wrong name is stickier than a wrong letter: do not guess."""
+        from backend import person_names
+        doc = generic.set_field(generic.new_doc(), "subject", "a figure in a heavy coat", generic.ORIGIN_ASSET)
+        self.assertIn(generic.names(generic.ensure_names(doc, seed="s"))[1], person_names.NEUTRAL)
+
+    def test_names_are_stable_across_rebuilds(self):
+        doc = self.peopled()
+        again = generic.ensure_names(doc, seed="session-1")
+        self.assertEqual(generic.names(doc), generic.names(again))
+
+    def test_two_people_never_share_a_name(self):
+        doc = generic.new_doc()
+        for index in range(1, 5):
+            doc = generic.set_field(doc, generic.person_key("subject", index), "a woman", generic.ORIGIN_ASSET)
+        given = generic.names(generic.ensure_names(doc, seed="s"))
+        self.assertEqual(len(set(given.values())), len(given))
+
+    def test_an_empty_person_is_not_named(self):
+        self.assertEqual(generic.names(generic.ensure_names(generic.new_doc(), seed="s")), {})
+
+    def test_the_name_shows_in_the_heading_and_in_audit_messages(self):
+        doc = self.peopled()
+        name = generic.names(doc)[2]
+        self.assertIn(f"{name} (B)", [title for title, _keys in generic.doc_groups(doc)])
+        self.assertEqual(generic.label_for("wardrobe#2", doc), f"Wardrobe ({name})")
+
+    def test_the_user_can_rename_anyone(self):
+        doc = generic.set_name(self.peopled(), 1, "Elke")
+        self.assertEqual(generic.names(doc)[1], "Elke")
+        self.assertNotIn(1, generic.names(generic.set_name(doc, 1, "")), "clearing a name removes it")
+
+    def test_the_compile_is_told_the_names_are_not_in_the_picture(self):
+        rendered = generic.render(self.peopled())
+        self.assertIn("are labels for these people, not part of the scene", rendered)
+        self.assertIn("Never write a label in the prompt", rendered)
+
+
 class BuildTests(unittest.TestCase):
     def test_a_build_can_write_both_people(self):
         answer = (

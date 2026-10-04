@@ -297,6 +297,80 @@ class LockAndGoalPipelineTests(unittest.TestCase):
         self.assertFalse(result["format_repair_applied"])
         self.assertEqual(result["prompt"], GOOD_PROSE, "the model's own writing, not a spliced draft that failed")
         self.assertIn("still failed", result["format_repair_failure"])
+        self.assertEqual(result["format_repair_best_attempt"], 0, "nothing improved, so a tie goes to the first draft")
+
+    def test_an_exhausted_budget_keeps_the_best_draft_not_the_first(self):
+        """Measured: the loop used to discard every pass that improved the prompt.
+
+        With two unmet goals and one correction that fixes one of them, the old
+        code reverted to the first draft AND to its audit, so the user was shown
+        two unmet goals for a draft that had one. Spending more corrections
+        could never make the counts come down.
+        """
+        a = goals.new_goal("do not make it feel like a commercial")
+        b = goals.new_goal("keep the vase ceramic")
+        both_unmet = json.dumps({"verdicts": [
+            {"id": a["id"], "met": False, "reason": "reads like an advert"},
+            {"id": b["id"], "met": False, "reason": "vase material dropped"},
+        ]})
+        one_fixed = json.dumps({"verdicts": [
+            {"id": a["id"], "met": True, "reason": "plain enough"},
+            {"id": b["id"], "met": False, "reason": "vase material still dropped"},
+        ]})
+        better = GOOD_PROSE + " Quieter now."
+        backend = _CharacterizedBackend([
+            response(GOOD_PROSE, prompt_tokens=10, completion_tokens=40),
+            response(both_unmet, prompt_tokens=8, completion_tokens=12),
+            response(better, prompt_tokens=12, completion_tokens=44),
+            response(one_fixed, prompt_tokens=8, completion_tokens=10),
+        ])
+        result = run(backend, request("Krea2", goal_list=[a, b], repair_attempts=1))
+        self.assertFalse(result["format_repair_applied"], "one goal is still unmet")
+        self.assertEqual(result["prompt"], better, "the improved draft, not the first one")
+        self.assertEqual(result["format_repair_best_attempt"], 1)
+        unmet = [
+            goal for goal in result["prompt_audit"]["goals"]
+            if goal.get("enabled") and goal.get("verdict") == "unmet"
+        ]
+        self.assertEqual(len(unmet), 1, "the counts shown must describe the draft actually handed back")
+
+    def test_a_correction_that_makes_it_worse_does_not_become_the_answer(self):
+        """The reported symptom: the counts went UP as corrections were spent.
+
+        Correction 1 fixes a goal, correction 2 loses it again. The loop keeps
+        the improved middle draft rather than the last one it happened to write,
+        and the failure text describes the draft handed back.
+        """
+        a = goals.new_goal("do not make it feel like a commercial")
+        b = goals.new_goal("keep the vase ceramic")
+
+        def verdicts(a_met, b_met):
+            return json.dumps({"verdicts": [
+                {"id": a["id"], "met": a_met, "reason": "advert" if not a_met else "plain"},
+                {"id": b["id"], "met": b_met, "reason": "material" if not b_met else "ceramic"},
+            ]})
+
+        improved = GOOD_PROSE + " Quieter now."
+        regressed = GOOD_PROSE + " Glossier again."
+        backend = _CharacterizedBackend([
+            response(GOOD_PROSE, prompt_tokens=10, completion_tokens=40),
+            response(verdicts(False, False), prompt_tokens=8, completion_tokens=12),
+            response(improved, prompt_tokens=12, completion_tokens=44),
+            response(verdicts(True, False), prompt_tokens=8, completion_tokens=10),
+            response(regressed, prompt_tokens=12, completion_tokens=44),
+            response(verdicts(False, False), prompt_tokens=8, completion_tokens=10),
+        ])
+        result = run(backend, request("Krea2", goal_list=[a, b], repair_attempts=2))
+        self.assertFalse(result["format_repair_applied"])
+        self.assertEqual(result["format_repair_attempts"], 2)
+        self.assertEqual(result["prompt"], improved, "not the last draft, and not the first")
+        self.assertEqual(result["format_repair_best_attempt"], 1)
+        unmet = [
+            goal for goal in result["prompt_audit"]["goals"]
+            if goal.get("enabled") and goal.get("verdict") == "unmet"
+        ]
+        self.assertEqual(len(unmet), 1, "the counts come down and stay down")
+        self.assertIn("material", result["format_repair_failure"], "describes the draft on screen")
 
     def test_zero_attempts_never_calls_the_model_again(self):
         """Some users would rather see the first draft and fix it themselves."""

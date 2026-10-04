@@ -3,8 +3,11 @@ export const ASPECT_RATIOS = [
   ["4:3", "Landscape"], ["9:16", "Vertical"], ["16:9", "Widescreen"], ["21:9", "Ultrawide"],
 ];
 
-export function generationButtonMarkup(icon, busy, label) {
-  return busy ? `<span class="h3ps-spinner"></span><span data-generate-label>Cancel</span>`
+// `busyLabel` says what the click will DO, because while a run is going the
+// button is the only control that stops it and "Cancel" alone never said what
+// it was cancelling. Sequence keeps the old wording; it has its own chrome.
+export function generationButtonMarkup(icon, busy, label, busyLabel = "Cancel") {
+  return busy ? `<span class="h3ps-spinner"></span><span data-generate-label>${busyLabel}</span>`
     : `${icon("spark", 16)}<span data-generate-label>${label}</span>`;
 }
 

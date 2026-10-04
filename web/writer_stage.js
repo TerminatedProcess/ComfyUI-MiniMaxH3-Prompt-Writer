@@ -22,6 +22,7 @@ import {
   changeGoal,
   describeAsset,
   editGenericField,
+  renamePerson,
   expandBrief,
   getSession,
   getTargets,
@@ -67,6 +68,15 @@ function heatLevel(inputs) {
   if (Number.isInteger(stored)) return Math.max(0, Math.min(4, stored));
   // A session that predates the dial carries only the boolean.
   return inputs?.nsfw === false ? 0 : DEFAULT_HEAT;
+}
+
+/** Which person a document group belongs to, if any. Subject fields carry the
+ *  suffix, so the group's own first field says who it is about. */
+function personIndexOf(group) {
+  const key = (group.fields || [])[0] || "";
+  if (!key.startsWith("subject")) return 0;
+  const [, suffix] = key.split("#");
+  return suffix ? Number(suffix) : 1;
 }
 
 export function createWriterStage(host) {
@@ -242,11 +252,20 @@ export function createWriterStage(host) {
 
   function renderDocument() {
     const groups = query("[data-generic-groups]");
-    groups.innerHTML = session.groups.map((group) => `
+    groups.innerHTML = session.groups.map((group) => {
+      // A person's name is a handle the user owns: one click to change it,
+      // because a name read off a picture can be the wrong one and it sticks.
+      const person = personIndexOf(group);
+      const heading = person
+        ? `<h4><button type="button" class="h3ps-person-name" data-rename-person="${person}"
+             title="Rename this person">${escape(group.title)}</button></h4>`
+        : `<h4>${escape(group.title)}</h4>`;
+      return `
       <section class="h3ps-generic-group">
-        <h4>${escape(group.title)}</h4>
+        ${heading}
         ${group.fields.map(fieldRow).join("")}
-      </section>`).join("");
+      </section>`;
+    }).join("");
   }
 
   /** The document as pasteable text: the fields that have a value, grouped and
@@ -666,6 +685,32 @@ export function createWriterStage(host) {
     return done;
   }
 
+  function startRename(button) {
+    if (editing || busy) return;
+    const person = Number(button.dataset.renamePerson);
+    const current = (session.names || {})[String(person)] || "";
+    editing = `name:${person}`;
+    button.outerHTML = `<input type="text" class="h3ps-generic-input h3ps-person-input" value="${escape(current)}"
+      maxlength="40" aria-label="Name for this person">`;
+    const input = query(".h3ps-person-input");
+    input.focus();
+    input.select();
+    const commit = async () => {
+      const next = input.value.trim();
+      editing = null;
+      if (next === current) { render(); return; }
+      await withBusy("Renaming", async () => {
+        applySession(await renamePerson({ session_id: host.sessionId(), person, name: next }));
+      });
+      render();
+    };
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); commit(); }
+      if (event.key === "Escape") { event.preventDefault(); editing = null; render(); }
+    });
+    input.addEventListener("blur", commit, { once: true });
+  }
+
   function startEdit(row) {
     if (editing || busy) return;
     const key = row.dataset.field;
@@ -736,6 +781,8 @@ export function createWriterStage(host) {
       event.currentTarget.setAttribute("aria-expanded", String(open));
     });
     query("[data-generic-groups]").addEventListener("click", (event) => {
+      const rename = event.target.closest("[data-rename-person]");
+      if (rename) { startRename(rename); return; }
       const value = event.target.closest("[data-generic-value]");
       if (value) startEdit(value.closest(".h3ps-generic-row"));
     });

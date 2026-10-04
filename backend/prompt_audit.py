@@ -190,3 +190,45 @@ def audit_prompt(
         "quality_target_pass": not quality_warnings,
         "reference_understanding": "manual_review_required",
     }
+
+
+def unmet_goal_count(audit: dict[str, Any] | None) -> int:
+    """Goals the verifier actively rejected -- the number the studio shows.
+
+    A goal left pending is NOT counted: "could not be verified" is not the same
+    as "failed", and treating it as a failure would make an unverifiable goal
+    look like a regression on every draft.
+    """
+    goals = (audit or {}).get("goals") or []
+    return sum(
+        1 for goal in goals
+        if isinstance(goal, dict) and goal.get("enabled") and goal.get("verdict") == "unmet"
+    )
+
+
+def severity(audit: dict[str, Any] | None) -> tuple[int, int, int, int]:
+    """How bad a draft is, for choosing between two drafts of the same prompt.
+
+    Compared lexicographically, worst class first, lower is better; (0, 0, 0, 0)
+    is a clean audit. The order is the order the user cares about: losing a fact
+    they established is worse than an unmet goal, which is worse than a format
+    failure, which is worse than a quality warning.
+
+    This exists because the repair loop used to hand back the FIRST draft
+    whenever it ran out of attempts, discarding passes that had genuinely
+    improved the prompt -- and reporting the first draft's counts, so the numbers
+    never came down no matter how many corrections were spent.
+
+    `shared_failures` deliberately counts the lock and goal messages a second
+    time. It only ever breaks a tie, because the two classes it duplicates are
+    compared first; what it adds is the target's OWN format failures (Krea 2 and
+    Anima report theirs nowhere else), which is exactly what should separate two
+    drafts that drop the same facts and miss the same goals.
+    """
+    audit = audit or {}
+    return (
+        len(audit.get("lock_violations") or []),
+        unmet_goal_count(audit),
+        len(audit.get("shared_failures") or []),
+        len(audit.get("quality_warnings") or []),
+    )

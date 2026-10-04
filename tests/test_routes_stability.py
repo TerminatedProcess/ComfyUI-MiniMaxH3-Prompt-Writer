@@ -1134,3 +1134,49 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BestSoFarSummaryTests(unittest.TestCase):
+    """What the studio is told about the best draft this target has produced.
+
+    The counts reported are the BEST draft's, not the new one's: they are what
+    the user is being offered, and quoting the new draft's numbers next to a
+    "restore the better draft" button would describe the wrong prompt.
+    """
+
+    def _state(self, best):
+        return {"outputs": {"Krea2": {"best": best}}}
+
+    def test_a_worse_draft_carries_the_better_prompt_back(self):
+        state = self._state({
+            "prompt": "the good one",
+            "negative_prompt": "worst quality",
+            "audit": {"lock_violations": [], "goals": [{"enabled": True, "verdict": "unmet"}]},
+        })
+        result = {"prompt_audit": {"lock_violations": ["wardrobe"]}}
+        summary = routes._best_so_far_summary(state, "Krea2", result)
+        self.assertFalse(summary["is_best"])
+        self.assertEqual(summary["prompt"], "the good one")
+        self.assertEqual(summary["negative_prompt"], "worst quality")
+        self.assertEqual(summary["unmet_goals"], 1)
+        self.assertEqual(summary["dropped_facts"], 0)
+
+    def test_the_best_draft_does_not_carry_a_prompt(self):
+        """Nothing to offer, so nothing is sent -- the payload stays small."""
+        state = self._state({"prompt": "an older draft", "audit": {"lock_violations": ["wardrobe"]}})
+        result = {"prompt_audit": {"lock_violations": []}}
+        summary = routes._best_so_far_summary(state, "Krea2", result)
+        self.assertTrue(summary["is_best"])
+        self.assertNotIn("prompt", summary)
+
+    def test_a_tie_counts_as_best_so_the_newest_draft_stands(self):
+        audit = {"lock_violations": [], "goals": [{"enabled": True, "verdict": "unmet"}]}
+        summary = routes._best_so_far_summary(
+            self._state({"prompt": "older", "audit": audit}), "Krea2", {"prompt_audit": dict(audit)},
+        )
+        self.assertTrue(summary["is_best"], "no reason to send the user backwards for an equal draft")
+
+    def test_a_target_with_no_history_reports_the_draft_as_best(self):
+        summary = routes._best_so_far_summary({}, "Krea2", {"prompt_audit": {"lock_violations": ["wardrobe"]}})
+        self.assertTrue(summary["is_best"])
+        self.assertNotIn("prompt", summary)

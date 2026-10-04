@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from . import generic, heat as heat_levels, goals as goal_ledger
+from . import generic, heat as heat_levels, goals as goal_ledger, prompt_audit
 
 SCHEMA = "session/1"
 STATE_ROOT = Path(__file__).resolve().parent.parent / "data" / "sessions"
@@ -237,8 +237,9 @@ def record_output(
     Blanking the output on every target switch would make the right-hand pane
     feel like it lost the prompt you just made.
     """
+    generic_updated_at = (state.get("generic") or {}).get("updated_at")
     outputs = dict(state.get("outputs") or {})
-    outputs[mode] = {
+    record = {
         "prompt": prompt,
         "negative_prompt": negative_prompt or "",
         "variant": variant,
@@ -246,10 +247,43 @@ def record_output(
         "at": time.time(),
         # The document the prompt was compiled from, so the studio can mark an
         # output stale once the conversation has moved the generic prompt on.
-        "generic_updated_at": (state.get("generic") or {}).get("updated_at"),
+        "generic_updated_at": generic_updated_at,
     }
+    previous_best = (outputs.get(mode) or {}).get("best")
+    record["best"] = _better_of(previous_best, record, generic_updated_at)
+    outputs[mode] = record
     state["outputs"] = outputs
     return state
+
+
+def _better_of(
+    previous_best: Any, record: dict[str, Any], generic_updated_at: Any
+) -> dict[str, Any]:
+    """The least bad prompt this target has produced for the current document.
+
+    Pressing Generate again is a fresh, independent draft -- same prompt and even
+    the same pinned seed produce different output on this stack -- so the unmet
+    goal and dropped fact counts walk up as readily as down, and the user had no
+    way back to the draft that scored best. Keeping it is the only thing here
+    that spans two generations.
+
+    Tied to the document it was compiled from: once the conversation moves the
+    generic prompt on, an older draft is not a better answer to a question
+    nobody asked any more, so the best resets with it.
+    """
+    candidate = {key: value for key, value in record.items() if key != "best"}
+    if not isinstance(previous_best, dict):
+        return candidate
+    if previous_best.get("generic_updated_at") != generic_updated_at:
+        return candidate
+    # An empty audit is not a clean one. Scoring it would make an unaudited
+    # draft beat every audited draft forever, and the studio would offer it as
+    # the better prompt on the strength of a check that never ran.
+    if not (record.get("audit") or {}):
+        return previous_best
+    if prompt_audit.severity(record.get("audit")) < prompt_audit.severity(previous_best.get("audit")):
+        return candidate
+    return previous_best
 
 
 def media_snapshot(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -286,5 +320,10 @@ def public(state: dict[str, Any], *, attached: list[dict[str, Any]] | None = Non
             for title, keys in generic.doc_groups(state.get("generic") or generic.new_doc())
         ],
         "unspecified": list(generic.unspecified_fields(state.get("generic") or generic.new_doc())),
+        # Who each person is called, so the studio can show and rename them.
+        "names": {
+            str(index): name
+            for index, name in generic.names(state.get("generic") or generic.new_doc()).items()
+        },
         "media_missing": [item for item in snapshot if item.get("id") not in loaded_ids],
     }

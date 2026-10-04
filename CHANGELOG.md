@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.4.6 - 2026-09-09
+## 0.4.7 - unreleased
+
+### Changed
+
+- **Generate restarts a run you have already corrected.** Press Generate, notice the duration says 5 seconds when you wanted 10, fix it and press again: the run in flight is abandoned and a fresh one starts with the corrected inputs. Nothing from the discarded run is kept. With the inputs untouched the button still simply stops, because it is the only control that can.
+- **The button says which of the two it will do** — "Generating, click to stop", or "Generating, click to restart" once you have edited something. It used to say only "Cancel".
+
+### Fixed
+
+- **Corrections no longer throw away their own progress.** When the repair loop ran out of attempts it handed back the *first* draft and the first draft's audit, discarding every pass that had fixed something real — so spending more corrections could never bring the "goals unmet" and "facts missing" counts down. It now keeps the least bad draft, and reports that draft's counts. A tie still goes to the first draft.
+- **The studio can count.** Every repair message said "the first draft" and "repaired once" regardless of how many passes ran, so three corrections looked identical to one. The attempt counts the backend has always reported are now actually read.
+- **The best prompt per target survives a worse regeneration.** Pressing Generate again is an independent draft and can come out worse; the better one used to be gone. The best draft for the current document is kept, and the toast offers it back. It resets once the conversation moves the generic prompt on, because an older draft is not a better answer to a question nobody asked.
 
 - Added **Sequence mode**: turn one brief into a series of timed clips with consistent action and references. Each clip gets its own complete prompt and can be edited separately.
 - Added **Compact mode** for Sequence.

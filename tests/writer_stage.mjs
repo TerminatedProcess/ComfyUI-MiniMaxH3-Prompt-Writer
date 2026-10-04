@@ -22,6 +22,7 @@ const apiStub = `data:text/javascript;base64,${Buffer.from(`
   export const buildGeneric = async (body) => { lastCall = ["build", body]; return { session: globalThis.__stageSession }; };
   export const sendGenericTurn = async (body) => { lastCall = ["turn", body]; return { session: globalThis.__stageSession }; };
   export const editGenericField = async (body) => { lastCall = ["field", body]; return { session: globalThis.__stageSession }; };
+  export const renamePerson = async (body) => { lastCall = ["rename", body]; return { session: globalThis.__stageSession }; };
   export const changeGoal = async (body) => { lastCall = ["goal", body]; return { session: globalThis.__stageSession }; };
   export const saveInputs = async (body) => { lastCall = ["inputs", body]; return { session: globalThis.__stageSession }; };
   export const resetSession = async (body) => { lastCall = ["reset", body]; return { session: globalThis.__stageSession }; };

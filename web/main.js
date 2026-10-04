@@ -845,13 +845,61 @@ async function uploadFiles(mode, files, replaceAssetId = null) {
   }
 }
 
+/** "2 of 3 corrections" — the backend has always reported this; nothing read it.
+ *
+ * Every message here used to say "repaired once" and "the first draft" no matter
+ * how many passes ran, so three corrections were indistinguishable from one. */
+function repairAttemptSummary(result) {
+  const attempts = Number(result.format_repair_attempts) || 0;
+  if (!attempts) return "no corrections";
+  const allowed = Number(result.format_repair_allowed) || 0;
+  const budget = allowed > attempts ? ` of ${allowed}` : "";
+  return `${attempts} correction${attempts === 1 ? "" : "s"}${budget}`;
+}
+
+/** Which draft is on screen, now that it is not always the first one. */
+function bestDraftSummary(result) {
+  const best = Number(result.format_repair_best_attempt) || 0;
+  return best ? `the best of ${(Number(result.format_repair_attempts) || 0) + 1} drafts` : "the first draft";
+}
+
 /** The repair that already succeeded, for the toast's Technical details. */
 function repairAppliedDetail(result) {
   const method = result.format_repair_multimodal
     ? "the uploaded references were read again"
     : `${result.format_repair_method}, without re-uploading media`;
   const tokens = result.format_repair_tokens ? ` (+${result.format_repair_tokens} tokens)` : "";
-  return `Auto-corrected: ${method}${tokens}.\n\nFirst draft: ${result.format_repair_reason}`;
+  return `Auto-corrected after ${repairAttemptSummary(result)}: ${method}${tokens}.\n\nFirst draft: ${result.format_repair_reason}`;
+}
+
+/** A draft that scored worse than one this target already produced.
+ *
+ * Regenerating is an independent draft, so the unmet-goal and dropped-fact
+ * counts walk up as readily as down. Before this the better draft was simply
+ * gone, which is what made repeated attempts feel like a coin toss. */
+function worseThanBest(result) {
+  const best = result.best_so_far;
+  if (!best || best.is_best !== false || !best.prompt) return null;
+  const counts = [
+    best.dropped_facts ? `${best.dropped_facts} dropped fact${best.dropped_facts === 1 ? "" : "s"}` : null,
+    best.unmet_goals ? `${best.unmet_goals} unmet goal${best.unmet_goals === 1 ? "" : "s"}` : null,
+  ].filter(Boolean);
+  return {
+    message: `An earlier draft for this target scored better (${counts.join(", ") || "a clean audit"}).`,
+    action: {
+      label: "Restore the better draft",
+      onClick: () => {
+        const output = studio.root.querySelector("[data-output]");
+        if (output) {
+          output.value = best.prompt;
+          studio.lastModelPrompt = best.prompt;
+          renderPromptHighlights();
+          syncModifiedState();
+          saveCurrentModeDraft();
+        }
+      },
+    },
+  };
 }
 
 /** What the audit actually objected to, in a few words. */
@@ -927,6 +975,48 @@ function currentDraftFields() {
 
 function currentBriefTextarea() {
   return studio.root.querySelector(studio.mode === "Music3" ? "[data-music-brief]" : "[data-video-brief]");
+}
+
+/** Everything that decides what this request IS, with the seed held constant.
+ *
+ * A fresh seed per run would make every request look different, so it is pinned
+ * here: this fingerprint answers "did the user change the inputs", not "is this
+ * a different roll of the dice". */
+function generationRequestFingerprint() {
+  try {
+    return JSON.stringify(buildGeneratePayload(studio, {
+      creativeBrief: currentBriefTextarea().value,
+      lyrics: studio.mode === "Music3" ? studio.root.querySelector("[data-music-lyrics]").value : "",
+      seed: 0,
+    }));
+  } catch {
+    return null;
+  }
+}
+
+/** Whether clicking the busy button should start over rather than just stop.
+ *
+ * The case this exists for: you press Generate, spot that the duration is 5s
+ * when you wanted 10s, fix it, and press again. Nothing from the abandoned run
+ * is kept, and the new one picks up the corrected inputs. With the inputs
+ * untouched the button still simply stops, because that is the only control
+ * that can. */
+function generationRestartWanted() {
+  if (!studio.requestBusy || studio.activeRequestFingerprint == null) return false;
+  const current = generationRequestFingerprint();
+  return current != null && current !== studio.activeRequestFingerprint;
+}
+
+function syncBusyGenerateLabel() {
+  if (!studio?.requestBusy) return;
+  // Scoped to the generate button: the Sequence workspace emits its own
+  // [data-generate-label], and which one an unscoped query finds is DOM order.
+  const label = studio.root.querySelector("[data-generate] [data-generate-label]");
+  if (label) {
+    label.textContent = generationRestartWanted()
+      ? "Generating, click to restart"
+      : "Generating, click to stop";
+  }
 }
 
 async function copyPromptText(text, music = false, title = null) {
@@ -1244,7 +1334,11 @@ function setGenerationState(state, label, detail) {
     ? "Available after the active Writer request finishes"
     : "Unload models held by ComfyUI without clearing cached workflow results";
   button.classList.toggle("is-cancel", busy);
-  if (!busy || !wasBusy) button.innerHTML = generationButtonMarkup(icon, busy, studio.mode === "Music3" ? "Generate caption" : "Generate prompt");
+  if (!busy || !wasBusy) {
+    button.innerHTML = generationButtonMarkup(
+      icon, busy, studio.mode === "Music3" ? "Generate caption" : "Generate prompt", "Generating, click to stop",
+    );
+  }
   renderMedia(studio.mode);
   syncLifecycleActions();
   status.hidden = !busy;
@@ -1335,12 +1429,16 @@ async function prepareWriterRequest() {
 }
 
 function markActiveWriterRequest() {
+  // What this run was launched with, so a later click can tell "stop" from
+  // "I fixed something, start over".
+  studio.activeRequestFingerprint = generationRequestFingerprint();
   studio.activeRequestFamily = studio.selectedModel.family;
   studio.activeRequestModelId = studio.selectedModel.family === "ollama" ? studio.selectedModel.remote_model : studio.selectedModel.id;
   studio.activeRequestOllamaHost = studio.selectedModel.family === "ollama" ? studio.ollamaHost : null;
 }
 
 function clearActiveWriterRequest() {
+  studio.activeRequestFingerprint = null;
   studio.activeRequestFamily = null;
   studio.activeRequestModelId = null;
   studio.activeRequestOllamaHost = null;
@@ -1530,7 +1628,17 @@ async function runLifecycleAction(event) {
 async function startGenerationPreview() {
   if (studio.vramHandoffInFlight) return;
   if (studio.requestBusy) {
-    setGenerationState("busy", "Cancelling", "Stopping after the current token");
+    // A second click throws away the work done since the first one. If the
+    // inputs changed in between, that is a restart, not a stop: the run is
+    // abandoned and `finally` starts a fresh one with the corrected inputs.
+    studio.restartAfterCancel = generationRestartWanted();
+    setGenerationState(
+      "busy",
+      studio.restartAfterCancel ? "Restarting" : "Cancelling",
+      studio.restartAfterCancel
+        ? "Discarding this run and starting again with your changes"
+        : "Stopping after the current token",
+    );
     await cancel();
     return;
   }
@@ -1551,6 +1659,9 @@ async function startGenerationPreview() {
   markActiveWriterRequest();
   const generationDetail = external ? `${modelName} · the server may load its model if idle` : apiProvider ? `${modelName} · ${studio.selectedModel.api_preset}` : modelName;
   setGenerationState("busy", remote ? "Contacting provider" : "Loading model", generationDetail);
+  // Kept out of setGenerationState, which is pinned to a narrow dependency list
+  // by `startup generation state has no legacy preview dependency`.
+  syncBusyGenerateLabel();
   let pollingActive = true;
   studio.statusTimer = setInterval(async () => {
     try {
@@ -1558,6 +1669,8 @@ async function startGenerationPreview() {
       if (!pollingActive) return;
       const labels = { loading_model: remote ? "Contacting provider" : "Loading model", processing_media: "Processing references", generating: "Generating", cancelling: "Cancelling" };
       if (labels[status.phase]) setGenerationState("busy", labels[status.phase], generationDetail);
+      // Edit the duration mid-run and the button has to stop promising to stop.
+      syncBusyGenerateLabel();
     } catch {}
   }, 650);
   try {
@@ -1588,11 +1701,14 @@ async function startGenerationPreview() {
       // repair was discarded, and this is the unrepaired first draft. So it stays
       // loud, and it offers the action instead of describing one. The full
       // failure text -- which said the same thing twice -- is in the details.
+      const worse = worseThanBest(result);
       showToast(
         "Prompt generated with a warning",
-        `The repair was rejected (${auditFailureSummary(result.prompt_audit)}), so this is the first draft — see the goals panel.`,
+        `${repairAttemptSummary(result)} did not clear the audit (${auditFailureSummary(result.prompt_audit)}), `
+        + `so this is ${bestDraftSummary(result)} — see the goals panel.`
+        + (worse ? ` ${worse.message}` : ""),
         `First draft: ${result.format_repair_reason}\n\nRepair: ${result.format_repair_failure}`,
-        { label: "Generate again", onClick: () => startGenerationPreview() },
+        worse ? worse.action : { label: "Generate again", onClick: () => startGenerationPreview() },
         { dismissOnWorkspaceClick: true },
       );
     } else {
@@ -1606,7 +1722,14 @@ async function startGenerationPreview() {
       // used to arrive at the same volume as a real problem. It is recorded in
       // the meta line under the prompt instead -- "· auto-corrected", hover for
       // what was corrected.
-      showToast(studio.mode === "Music3" ? "Caption generated" : "Prompt generated", details.filter(Boolean).join(" · "));
+      const worse = worseThanBest(result);
+      showToast(
+        studio.mode === "Music3" ? "Caption generated" : "Prompt generated",
+        details.filter(Boolean).join(" · ") + (worse ? `\n\n${worse.message}` : ""),
+        null,
+        worse ? worse.action : null,
+        worse ? { dismissOnWorkspaceClick: true } : {},
+      );
     }
     studio.stage?.afterCompile(result, studio.mode).catch(() => {});
     if (result.media_warnings?.length) {
@@ -1619,7 +1742,9 @@ async function startGenerationPreview() {
   } catch (error) {
     if (error.code !== "GENERATION_CANCELLED") studio.desktopNotifications.notify("Generation failed. Open Writer for details.");
     if (error.code === "GENERATION_CANCELLED") {
-      showToast("Generation cancelled", "The active request stopped.");
+      // Silent when this cancel exists only to start again: "Generation
+      // cancelled" next to a run that is already restarting reads as a failure.
+      if (!studio.restartAfterCancel) showToast("Generation cancelled", "The active request stopped.");
     } else if (error.code === "INSUFFICIENT_FREE_VRAM") {
       showVramRetry(error, startGenerationPreview);
     } else if (error.code === "EXTERNAL_VISION_REQUIRED") {
@@ -1652,6 +1777,14 @@ async function startGenerationPreview() {
     } catch {}
     clearActiveWriterRequest();
     setGenerationState("idle", "", "");
+    if (studio.restartAfterCancel) {
+      // Relaunched from here, not straight after cancel(): the server refuses a
+      // second request while one is still registered, so the restart has to wait
+      // for THIS run to finish unwinding. The flag is cleared first, so a
+      // restart that fails to start cannot leave it armed.
+      studio.restartAfterCancel = false;
+      startGenerationPreview();
+    }
   }
 }
 
@@ -3035,8 +3168,8 @@ async function submitRefinement() {
         ? thinkingFallbackMessage(result, "rewrite")
         : result.format_repair_applied
           ? result.format_repair_multimodal
-            ? `The first draft failed ${result.format_repair_reason}; the existing references were checked again and repaired once.`
-            : `The first draft failed ${result.format_repair_reason}; its format was repaired once without media.`
+            ? `The first draft failed ${result.format_repair_reason}; the existing references were checked again and repaired in ${repairAttemptSummary(result)}.`
+            : `The first draft failed ${result.format_repair_reason}; its format was repaired in ${repairAttemptSummary(result)} without media.`
         : result.format_repair_failure
           ? `Format warning: ${result.format_repair_reason}; safe repair rejected because ${result.format_repair_failure}.`
         : `${result.total_seconds.toFixed(1)}s · ${result.tokens_per_second.toFixed(1)} tok/s · no media re-upload`,

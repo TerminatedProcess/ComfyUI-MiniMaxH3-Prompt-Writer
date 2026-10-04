@@ -64,6 +64,10 @@
 .h3ps-delivery-repairs { display: flex; align-items: center; gap: calc(6px * var(--h3ps-interface-scale)); }
 .h3ps-delivery-repairs label { color: var(--h3ps-muted); font-size: var(--h3ps-font-label); white-space: nowrap; }
 .h3ps-delivery-repairs select { min-width: calc(58px * var(--h3ps-interface-scale)); }
+/* A person's name is editable in place: it reads as a heading until you hover. */
+.h3ps-person-name { padding: 0; border: 0; border-bottom: 1px dashed transparent; background: none; color: inherit; font: inherit; cursor: text; }
+.h3ps-person-name:hover, .h3ps-person-name:focus-visible { border-bottom-color: var(--h3ps-border); color: var(--h3ps-text); }
+.h3ps-person-input { max-width: calc(180px * var(--h3ps-interface-scale)); }
 .h3ps-generic-actions { display: flex; align-items: center; gap: calc(10px * var(--h3ps-interface-scale)); white-space: nowrap; }
 .h3ps-generic-empty { margin: 0; padding: calc(14px * var(--h3ps-interface-scale)); color: var(--h3ps-muted); font-size: var(--h3ps-font-control); line-height: 1.5; }
 .h3ps-generic-warning { margin: 0; padding: calc(10px * var(--h3ps-interface-scale)) calc(12px * var(--h3ps-interface-scale)); border-top: 1px solid var(--h3ps-border-soft); color: var(--h3ps-warning); font-size: var(--h3ps-font-label); }

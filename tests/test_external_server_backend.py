@@ -19,6 +19,9 @@ class _FakeLlamaHandler(BaseHTTPRequestHandler):
     last_completion = None
     slow_started = threading.Event()
     vision = True
+    # When set, the server also answers GET /models with router lifecycle
+    # states, which is what makes the backend treat it as a router.
+    router_models = None
     reasoning_mode = "off"
     completion_count = 0
 
@@ -36,7 +39,12 @@ class _FakeLlamaHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._json({"status": "ok"})
-        elif self.path == "/props":
+        elif self.path == "/models":
+            if type(self).router_models is None:
+                self._json({"error": {"message": "not found"}}, 404)
+            else:
+                self._json({"data": type(self).router_models})
+        elif self.path.startswith("/props"):
             self._json({"n_ctx": 16384, "modalities": {"vision": type(self).vision, "audio": False}})
         elif self.path == "/v1/models":
             capabilities = ["completion", "multimodal"] if type(self).vision else ["completion"]
@@ -166,6 +174,7 @@ class ExternalServerBackendTests(unittest.TestCase):
         _FakeLlamaHandler.slow_started.clear()
         _FakeLlamaHandler.vision = True
         _FakeLlamaHandler.reasoning_mode = "off"
+        _FakeLlamaHandler.router_models = None
         _FakeLlamaHandler.completion_count = 0
         self.backend = ExternalServerBackend()
 
@@ -191,6 +200,39 @@ class ExternalServerBackendTests(unittest.TestCase):
         self.assertTrue(model["capabilities"]["images"])
         self.assertTrue(model["externally_managed"])
         self.assertTrue(model["thinking_managed_by_server"])
+
+    def test_a_single_model_server_supersedes_a_stale_model_id(self):
+        """Measured against Strata through the LLM-Redirect gateway.
+
+        Connecting writes the resolved id back into the Model ID box, so switching
+        the engine behind the gateway leaves a name the user cannot clear -- the
+        probe refills it. A server offering exactly ONE model ignores the model id
+        on every request anyway, so refusing is stricter than the server itself.
+
+        This used to be gated on the server NOT looking like a router. Strata
+        reports `status`, which is enough for router detection to fire, so the
+        supersede was skipped for exactly the swap it exists to absorb.
+        """
+        _FakeLlamaHandler.router_models = [
+            {"id": "strata-next.gguf", "status": {"value": "loaded"}}
+        ]
+
+        model = self.backend.probe_model({"url": self.url, "model": "the-previous-engine.gguf"})
+
+        self.assertEqual(model["remote_model"], "strata-next.gguf")
+        self.assertEqual(model["server_context_tokens"], 16384)
+
+    def test_a_multi_model_router_still_rejects_an_unknown_model_id(self):
+        """The case the old guard was really protecting: with several models the
+        requested name is a genuine choice, so a mismatch stays an error."""
+        _FakeLlamaHandler.router_models = [
+            {"id": "one.gguf", "status": {"value": "loaded"}},
+            {"id": "two.gguf", "status": {"value": "unloaded"}},
+        ]
+
+        with self.assertRaises(ModelError) as error:
+            self.backend.probe_model({"url": self.url, "model": "neither.gguf"})
+        self.assertEqual(error.exception.code, "EXTERNAL_MODEL_NOT_FOUND")
 
     def test_probe_accepts_external_text_only_model(self):
         _FakeLlamaHandler.vision = False

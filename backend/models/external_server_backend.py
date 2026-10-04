@@ -384,17 +384,21 @@ class ExternalServerBackend:
         matches = [item for item in entries if isinstance(item, dict) and (not requested_model or item.get("id") == requested_model)]
         selected = matches[0] if len(matches) == 1 else None
         superseded = ""
-        if selected is None and not router and len(entries) == 1 and isinstance(entries[0], dict):
-            # A plain llama-server holds exactly one model and ignores the model id on
-            # every request anyway, so refusing here is stricter than the server itself
-            # -- it can only ever produce a false failure. It did: connecting writes the
+        if selected is None and len(entries) == 1 and isinstance(entries[0], dict):
+            # A server offering exactly ONE model ignores the model id on every
+            # request anyway, so refusing here is stricter than the server itself --
+            # it can only ever produce a false failure. It did: connecting writes the
             # resolved id back into the Model ID box, so swapping the server's model
             # leaves a stale name the user cannot clear (the probe refills it), and the
             # next generate dies with EXTERNAL_MODEL_NOT_FOUND.
             #
-            # A router is different: it lists several models and can load them on
-            # demand, so there the requested name is a real choice and a mismatch stays
-            # an error.
+            # The test is the model COUNT, not whether the server looks like a router.
+            # Strata reports a `status` field, which is enough for router detection to
+            # fire, yet it serves a single model -- so gating this on `not router` left
+            # it raising on exactly the swap this exists to absorb (llama.cpp -> Strata
+            # through the gateway). A router listing SEVERAL models is the real case to
+            # protect: there the requested name is a genuine choice and a mismatch
+            # stays an error.
             selected = entries[0]
             superseded = requested_model
         if selected is None:

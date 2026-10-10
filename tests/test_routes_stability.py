@@ -1132,6 +1132,75 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(text_key, routes.GENERATION_CACHE)
 
 
+class SubjectRouteTests(unittest.TestCase):
+    """What the subject route refuses before it touches the store.
+
+    Grouping is the only place the studio sends a number that becomes a person
+    index, so the bad shapes are rejected at the door rather than deep in the
+    media store where the error reads like a bug.
+    """
+
+    SESSION = "11111111-2222-3333-4444-555555555555"
+
+    def setUp(self):
+        routes.STATE.update({"active_request_id": None, "media_mutation_active": False})
+        routes.GENERATION_CACHE.clear()
+        routes.GENERATION_CACHE_ACCESS.clear()
+
+    @staticmethod
+    def payload(response):
+        return json.loads(response.body.decode("utf-8"))
+
+    def call(self, body):
+        return asyncio.run(routes.set_media_subject(_Request(body=body)))
+
+    def test_a_bad_request_shape_never_reaches_the_store(self):
+        bad = [
+            {"session_id": self.SESSION},
+            {"session_id": self.SESSION, "asset_ids": "a1", "subject": 1},
+            {"session_id": self.SESSION, "asset_ids": [], "subject": 1},
+            {"session_id": self.SESSION, "asset_ids": [1], "subject": 1},
+            # True is an int in Python, which would otherwise mean subject 1.
+            {"session_id": self.SESSION, "asset_ids": ["a1"], "subject": True},
+            {"session_id": self.SESSION, "asset_ids": ["a1"], "subject": "1"},
+            {"session_id": self.SESSION, "asset_ids": ["a1"], "subject": 1.5},
+            # More pictures than a session can hold: the sibling route is
+            # implicitly bounded by its set-equality check, this one is not.
+            {"session_id": self.SESSION, "asset_ids": ["a"] * 13, "subject": 1},
+        ]
+        with patch.object(routes.STORE, "set_subject") as store:
+            for body in bad:
+                response = self.call(body)
+                self.assertEqual(response.status, 400, body)
+                self.assertEqual(self.payload(response)["error"]["code"], "INVALID_REQUEST", body)
+            store.assert_not_called()
+
+    def test_null_releases_the_pictures_rather_than_being_a_missing_value(self):
+        with patch.object(routes.STORE, "set_subject", return_value=[]) as store:
+            response = self.call({"session_id": self.SESSION, "asset_ids": ["a1", "a2"], "subject": None})
+        self.assertEqual(response.status, 200)
+        store.assert_called_once_with(self.SESSION, ["a1", "a2"], None)
+
+    def test_a_grouping_change_drops_the_cached_reference_prompt(self):
+        key = routes._cache_key(self.SESSION, "Reference")
+        routes.GENERATION_CACHE[key] = {"prompt": "stale"}
+        with patch.object(routes.STORE, "set_subject", return_value=[]):
+            self.call({"session_id": self.SESSION, "asset_ids": ["a1"], "subject": 2})
+        self.assertNotIn(key, routes.GENERATION_CACHE)
+
+    def test_a_busy_writer_is_refused(self):
+        for state in ({"active_request_id": "req-1"}, {"media_mutation_active": True}):
+            routes.STATE.update({"active_request_id": None, "media_mutation_active": False, **state})
+            try:
+                with patch.object(routes.STORE, "set_subject") as store:
+                    response = self.call({"session_id": self.SESSION, "asset_ids": ["a1"], "subject": 1})
+                self.assertEqual(response.status, 409, state)
+                self.assertEqual(self.payload(response)["error"]["code"], "GENERATION_BUSY", state)
+                store.assert_not_called()
+            finally:
+                routes.STATE.update({"active_request_id": None, "media_mutation_active": False})
+
+
 if __name__ == "__main__":
     unittest.main()
 

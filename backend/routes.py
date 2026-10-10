@@ -1434,5 +1434,41 @@ async def reorder_media(request: web.Request) -> web.Response:
     return web.json_response({"assets": assets})
 
 
+@routes.post(f"{ROUTE_PREFIX}/media/subject")
+async def set_media_subject(request: web.Request) -> web.Response:
+    busy = _generation_busy_error()
+    if busy is not None:
+        return busy
+    body = await _json_body(request)
+    # `subject` of None releases the pictures back to the unassigned tray, so
+    # it is a valid value rather than a missing one -- and a bool is an int in
+    # Python, which would otherwise make `true` mean subject 1.
+    subject = (body or {}).get("subject")
+    asset_ids = (body or {}).get("asset_ids")
+    # Bounded like its sibling: `reorder` is implicitly capped because its list
+    # must match the session's assets exactly, and a regrouping can never
+    # legitimately touch more files than a session is allowed to hold.
+    if body is None or not isinstance(asset_ids, list) or not asset_ids or (
+        len(asset_ids) > MODE_LIMITS["Reference"]["total"]
+    ) or (
+        not all(isinstance(asset_id, str) for asset_id in asset_ids)
+    ) or (
+        subject is not None and (isinstance(subject, bool) or not isinstance(subject, int))
+    ):
+        return _error("INVALID_REQUEST", "Asset IDs and a subject number or null are required.", status=400)
+    busy = _generation_busy_error()
+    if busy is not None:
+        return busy
+    try:
+        session_id = parse_session_id(body.get("session_id"))
+        assets = STORE.set_subject(session_id, asset_ids, subject)
+    except ValueError:
+        return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
+    except MediaError as error:
+        return _media_error(error)
+    _invalidate_generation_cache(session_id, "Reference")
+    return web.json_response({"assets": assets})
+
+
 register_sequence_routes(routes, sys.modules[__name__])
 register_generic_routes(routes, sys.modules[__name__])

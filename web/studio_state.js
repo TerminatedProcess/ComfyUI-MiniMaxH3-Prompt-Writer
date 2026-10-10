@@ -462,6 +462,10 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     mode: preferences?.mode || "Reference",
     lastVideoMode: preferences?.mode && preferences.mode !== "Music3" ? preferences.mode : "Reference",
     mediaFilter: "all",
+    // Subject boxes the user has opened but not filled yet. The filled ones are
+    // read off the assets themselves, so only the empty ones live here -- and
+    // an empty box is not worth surviving a reload.
+    extraSubjects: [],
     durationSeconds: preferences?.duration_seconds || 10,
     repairAttempts: Number.isInteger(preferences?.repair_attempts) ? preferences.repair_attempts : DEFAULT_REPAIR_ATTEMPTS,
     aspectRatio: preferences?.aspect_ratio || "16:9",

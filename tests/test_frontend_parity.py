@@ -48,3 +48,37 @@ class ModeInferenceParityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+SUBJECTS_MODULE = Path(__file__).resolve().parents[1] / "web" / "media_subjects.js"
+
+
+class SubjectCeilingParityTests(unittest.TestCase):
+    """The studio allocates subject boxes without asking the server first.
+
+    `Add subject` has to know when there is no room for another person, so the
+    ceiling is duplicated in `web/media_subjects.js`. A studio that offers a
+    seventh box would only find out it was wrong at the next drop.
+    """
+
+    def test_the_subject_ceiling_matches_python(self):
+        from backend.generic import MAX_PEOPLE
+
+        source = SUBJECTS_MODULE.read_text(encoding="utf-8")
+        match = re.search(r"MAX_SUBJECTS\s*=\s*(\d+)", source)
+        self.assertIsNotNone(match, "MAX_SUBJECTS is no longer a literal number")
+        self.assertEqual(int(match.group(1)), MAX_PEOPLE)
+
+    def test_the_letters_themselves_match_python(self):
+        """Length alone passed for ["1","2",...].
+
+        A changed PERSON_LETTERS would then leave the studio labelling boxes
+        A, B, C while the document called the same people something else --
+        silently, which is the one thing this harness exists to prevent.
+        """
+        from backend.generic import PERSON_LETTERS
+
+        source = SUBJECTS_MODULE.read_text(encoding="utf-8")
+        match = re.search(r"LETTERS\s*=\s*(\[[^\]]*\])", source)
+        self.assertIsNotNone(match, "LETTERS is no longer a literal array")
+        self.assertEqual(json.loads(match.group(1).replace("'", '"')), list(PERSON_LETTERS))

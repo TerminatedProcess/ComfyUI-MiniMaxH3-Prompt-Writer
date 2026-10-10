@@ -385,6 +385,9 @@ def register_generic_routes(routes, services) -> None:
         updated, pose_changed, pose_note = await _probe_pose(body, updated, manifest)
         if pose_changed:
             changed = tuple(dict.fromkeys((*changed, "pose")))
+        # The subject boxes say how many people there are, so a build that
+        # describes a different number is checkable rather than a hunch.
+        subject_note = conversation.people_mismatch(text, len(conversation.subject_groups(manifest)))
         # Anything the user changed while the model was working stays changed.
         state = session_store.merge_after_await(session_id, state, "generic", "goals", "conversation")
         state["generic"] = generic.ensure_names(updated, seed=session_id)
@@ -394,7 +397,8 @@ def register_generic_routes(routes, services) -> None:
             "Built the generic prompt from your brief"
             + (" and reference media." if manifest.get("assets") else ".")
             + (" The first answer was unusable, so it was written again." if retried else "")
-            + pose_note,
+            + pose_note
+            + subject_note,
             changed=changed,
             protected=protected,
         )

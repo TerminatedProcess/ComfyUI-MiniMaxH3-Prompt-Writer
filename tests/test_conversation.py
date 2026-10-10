@@ -451,3 +451,159 @@ class InstructionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _manifest(*subjects):
+    """A reference manifest whose pictures carry the given subject bindings."""
+    return {
+        "assets": [
+            {
+                "reference": f"<Picture {index}>",
+                "filename": f"pic{index}.png",
+                "type": "image",
+                "subject": subject,
+            }
+            for index, subject in enumerate(subjects, start=1)
+        ]
+    }
+
+
+class SubjectGroupingTests(unittest.TestCase):
+    """Which picture is evidence for which person, stated instead of inferred.
+
+    Six pictures, three of a woman and three of a man, is where guessing from
+    the pixels fails: the build either invents six people or averages them into
+    one, and nothing downstream can tell which happened.
+    """
+
+    def test_groups_are_read_off_the_manifest_in_order(self):
+        groups = conversation.subject_groups(_manifest(1, 1, 2, None))
+        self.assertEqual(groups, {1: ["<Picture 1>", "<Picture 2>"], 2: ["<Picture 3>"]})
+
+    def test_an_ungrouped_picture_belongs_to_nobody(self):
+        self.assertEqual(conversation.subject_groups(_manifest(None, None)), {})
+
+    def test_the_reference_list_names_each_picture_s_group(self):
+        lines = conversation._reference_lines(_manifest(1, 2, None))
+        self.assertIn("<Picture 1>: pic1.png (image) -- group 1", lines)
+        self.assertIn("<Picture 2>: pic2.png (image) -- group 2", lines)
+        self.assertNotIn("<Picture 3>: pic3.png (image) -- group", lines)
+
+    def test_groups_are_numbered_never_lettered(self):
+        """`_named_people` already puts letters in this message.
+
+        "A is Liz" and "Subject A is <Picture 1>" in one prompt is two claims
+        about A, and they agree only while the document matches the current
+        grouping -- which is precisely when the user has just regrouped and it
+        does not.
+        """
+        lines = conversation._reference_lines(_manifest(1, 2))
+        self.assertNotIn("Subject A", lines)
+        self.assertNotIn("Subject B", lines)
+
+    def test_numbers_follow_position_not_the_stored_index(self):
+        # Middle box closed: the remaining two are groups 1 and 2, with no
+        # renumbering write against the stored assets.
+        lines = conversation._reference_lines(_manifest(1, 3))
+        self.assertIn("<Picture 1>: pic1.png (image) -- group 1", lines)
+        self.assertIn("<Picture 2>: pic2.png (image) -- group 2", lines)
+
+    def test_no_grouping_leaves_the_contract_byte_identical(self):
+        self.assertEqual(
+            conversation.build_instructions(story=True, subjects=0),
+            conversation.build_instructions(story=True),
+        )
+        self.assertEqual(
+            conversation.turn_instructions(story=False, subjects=0),
+            conversation.turn_instructions(story=False),
+        )
+
+    def test_grouping_adds_the_contract_to_the_build_and_the_turn(self):
+        self.assertIn(conversation.SUBJECTS_CLAUSE, conversation.build_instructions(story=True, subjects=2))
+        self.assertIn(conversation.SUBJECTS_CLAUSE, conversation.turn_instructions(story=True, subjects=2))
+
+    def test_the_build_request_carries_the_grouping(self):
+        assembled = conversation.assemble_build(
+            session_id="s",
+            brief="a woman and a man on a bridge",
+            manifest=_manifest(1, 1, 2),
+            media_inputs=[],
+            doc=None,
+            goals=[],
+            story=True,
+            duration_seconds=None,
+            aspect_ratio=None,
+        )
+        content = assembled["messages"][1]["content"]
+        self.assertIn("group 1 is <Picture 1>, <Picture 2>", content)
+        self.assertIn("group 2 is <Picture 3>", content)
+        self.assertIn(conversation.SUBJECTS_CLAUSE, assembled["system_prompt"]["content"])
+
+
+class PeopleMismatchTests(unittest.TestCase):
+    """The grouping makes the people count checkable rather than hoped for."""
+
+    @staticmethod
+    def answer(count):
+        return json.dumps({"people": [{"subject": f"person {index}"} for index in range(count)]})
+
+    def test_a_matching_count_says_nothing(self):
+        self.assertEqual(conversation.people_mismatch(self.answer(2), 2), "")
+
+    def test_too_many_people_is_reported_with_both_numbers(self):
+        note = conversation.people_mismatch(self.answer(3), 2)
+        self.assertIn("You grouped 2 subjects", note)
+        self.assertIn("described 3 people", note)
+
+    def test_too_few_people_is_reported_too(self):
+        note = conversation.people_mismatch(self.answer(1), 2)
+        self.assertIn("described 1 person", note)
+
+    def test_without_grouping_there_is_nothing_to_check(self):
+        self.assertEqual(conversation.people_mismatch(self.answer(3), 0), "")
+
+    def test_an_unreadable_answer_is_not_a_mismatch(self):
+        # The build's own error path owns that failure; this check must not
+        # turn a parse problem into a confusing note about subjects.
+        self.assertEqual(conversation.people_mismatch("not json at all", 2), "")
+
+    def test_an_answer_without_people_is_not_a_mismatch(self):
+        self.assertEqual(conversation.people_mismatch(json.dumps({"scene": {}}), 2), "")
+
+    def test_people_nested_under_scene_is_still_counted(self):
+        # `apply_build` accepts the list wherever the model put it, so the
+        # check has to look in the same three places or it passes silently on
+        # exactly the answers that need checking.
+        nested = json.dumps({"scene": {"people": [{"subject": "a"}, {"subject": "b"}, {"subject": "c"}]}})
+        self.assertIn("described 3 people", conversation.people_mismatch(nested, 2))
+
+
+class CorruptSubjectTests(unittest.TestCase):
+    """A manifest is a file on disk, and a file on disk can be anything.
+
+    `subject` reaching the prompt builder unchecked meant two failures: an
+    unhashable value raised on every build and turn, and an out-of-range one
+    produced a group the studio has no box for -- the two sides disagreeing
+    about who is in the shot.
+    """
+
+    @staticmethod
+    def manifest(*subjects):
+        return {
+            "assets": [
+                {"reference": f"<Picture {index}>", "filename": f"p{index}.png", "type": "image", "subject": value}
+                for index, value in enumerate(subjects, start=1)
+            ]
+        }
+
+    def test_an_unhashable_subject_does_not_raise(self):
+        manifest = self.manifest([], {}, 1)
+        self.assertEqual(conversation.subject_groups(manifest), {1: ["<Picture 3>"]})
+        self.assertIn("<Picture 3>: p3.png (image) -- group 1", conversation._reference_lines(manifest))
+
+    def test_a_subject_outside_the_ceiling_is_ungrouped_on_both_sides(self):
+        from backend.generic import MAX_PEOPLE
+
+        manifest = self.manifest(0, MAX_PEOPLE + 1, -1)
+        self.assertEqual(conversation.subject_groups(manifest), {})
+        self.assertNotIn("group", conversation._reference_lines(manifest))

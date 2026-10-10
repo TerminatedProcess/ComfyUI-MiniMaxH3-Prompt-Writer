@@ -2,12 +2,13 @@ import { createDesktopNotifications } from "./desktop_notifications.js";
 import { promptHighlightMarkup } from "./prompt_highlights.js";
 import { generationButtonMarkup, sequenceNotificationOptions, aspectRatioMarkup, bindAspectRatio, splitMenuMarkup, setSplitMenuOpen, fieldCopyButtonMarkup } from "./writer_controls.js";
 import { mediaVisualDescriptor } from "./media_visual.js";
+import { assetsForSubject, canJoinSubject, nextSubjectIndex, openBoxesAfterMove, subjectIndices, subjectLetter, unassignedAssets } from "./media_subjects.js";
 import { createSequenceWorkspace } from "./sequence_workspace.js";
 import { createWriterStage } from "./writer_stage.js";
 import { createMediaZoom } from "./media_zoom.js";
 import { generateSequence, cancelSequence } from "./api/sequence.js";
 import { app } from "/scripts/app.js";
-import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getMediaManifest, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, unloadModel, uploadMedia } from "./api/h3studio.js";
+import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getMediaManifest, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, setMediaSubject, unloadModel, uploadMedia } from "./api/h3studio.js";
 import { comfyVramIsAlreadyEmpty, createSessionId, fileCountFromDataTransfer, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replacementTargetForFileDrop, replaceEventListener, vramReleaseReachedTarget } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
@@ -484,6 +485,53 @@ function renderAsset(asset, index) {
     </div>`;
 }
 
+/**
+ * The subject boxes, under the unassigned tray.
+ *
+ * Only drawn for the All and Images filters: a box that holds three pictures
+ * would look empty under the Video filter while its header claimed otherwise.
+ */
+function renderSubjects(assets, visibleAssets) {
+  const indices = subjectIndices(assets, studio.extraSubjects);
+  // Letters come from the FILLED boxes only. The writer is told about groups,
+  // and an empty box is not one: lettering it would shift every box after it,
+  // so an empty box between two filled ones had the studio calling a person
+  // Subject C while the prompt and the document called her B.
+  const lettered = subjectIndices(assets);
+  const next = nextSubjectIndex(indices);
+  const addSubject = next === null
+    ? ""
+    : `<button class="h3ps-add-subject" type="button" data-add-subject ${studio.requestBusy ? "disabled" : ""}>${icon("plus", 15)}<span>Add subject</span><small>Pick every picture of one person</small></button>`;
+  if (!indices.length) {
+    // Nothing to explain until there is something to explain: one tile, and
+    // the tray above it keeps behaving exactly as it did before subjects.
+    return `<div class="h3ps-subjects">${addSubject}</div>`;
+  }
+  const boxes = indices.map((index) => {
+    const held = assetsForSubject(assets, index);
+    const shown = assetsForSubject(visibleAssets, index);
+    const letter = subjectLetter(lettered, index);
+    // Deliberately not the document's name for this person. It only matches
+    // while the last build saw the current grouping, and nothing here can tell
+    // that it did -- swap two boxes' contents and the man's box would read
+    // "Liz" until the next Generate.
+    const title = letter ? `Subject ${letter}` : "New subject";
+    return `
+      <section class="h3ps-subject" data-subject-zone="${index}" aria-label="${title}">
+        <header>
+          <strong>${title}</strong>
+          <small>${held.length ? `${held.length} picture${held.length === 1 ? "" : "s"}` : "Add or drag pictures here"}</small>
+          <button type="button" data-add-to-subject="${index}" title="Add pictures to ${title}" aria-label="Add pictures to ${title}" ${studio.requestBusy ? "disabled" : ""}>${icon("plus", 12)}</button>
+          <button type="button" data-remove-subject="${index}" title="${letter ? `Release ${title}'s pictures` : "Close this box"}" aria-label="${letter ? `Release ${title}'s pictures` : "Close this box"}" ${studio.requestBusy ? "disabled" : ""}>${icon("close", 12)}</button>
+        </header>
+        <div class="h3ps-assets is-reference">${shown.map((asset) => renderAsset(asset, assets.indexOf(asset))).join("")}</div>
+      </section>`;
+  }).join("");
+  return `
+    <p class="h3ps-subjects-hint">Pictures in one box are the same person. Anything left above describes the scene, not a person.</p>
+    <div class="h3ps-subjects">${boxes}${addSubject}</div>`;
+}
+
 function referenceComposerAssets() {
   return studio.assets.filter((asset) => asset.mode === "Reference" && mediaVisualDescriptor(asset));
 }
@@ -591,11 +639,18 @@ function renderMedia(mode) {
       </div>` : "";
     const addLabel = !isReference || filter === "image" ? "Add image" : filter === "video" ? "Add video" : filter === "audio" ? "Add audio" : "Add media";
     const canAdd = isReference || assets.length < data.limit;
+    const addButton = canAdd
+      ? `<button class="${assets.length ? "h3ps-add-asset" : "h3ps-empty-drop"}" type="button" data-add-media ${studio.requestBusy ? "disabled" : ""}>${icon("plus", 18)}<span>${addLabel}</span><small>Drop files here</small></button>`
+      : "";
+    // Only Reference media describes people. In I2VA/FL2VA the pictures are
+    // frames of one shot, so there is nothing to group.
+    const trayAssets = isReference ? unassignedAssets(visibleAssets) : visibleAssets;
     media.innerHTML = `
       ${filters}
-      <div class="h3ps-assets ${isReference ? "is-reference" : ""}">${visibleAssets.map((asset) => renderAsset(asset, assets.indexOf(asset))).join("")}
-        ${canAdd ? `<button class="${assets.length ? "h3ps-add-asset" : "h3ps-empty-drop"}" type="button" data-add-media ${studio.requestBusy ? "disabled" : ""}>${icon("plus", 18)}<span>${addLabel}</span><small>Drop files here</small></button>` : ""}
-      </div>`;
+      <div class="h3ps-assets ${isReference ? "is-reference" : ""}" data-subject-zone="">${trayAssets.map((asset) => renderAsset(asset, assets.indexOf(asset))).join("")}
+        ${addButton}
+      </div>
+      ${isReference && (filter === "all" || filter === "image") ? renderSubjects(assets, visibleAssets) : ""}`;
   }
   notifyMediaCompatibility();
   // A card can vanish from under the pointer -- media cleared, a replace, a
@@ -726,6 +781,34 @@ function bindMediaActions(mode) {
   studio.root.querySelectorAll("[data-add-media]").forEach((button) => {
     button.addEventListener("click", () => chooseMedia(mode));
   });
+  studio.root.querySelectorAll("[data-add-subject]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const assets = studio.assets.filter((asset) => asset.mode === mode);
+      const next = nextSubjectIndex(subjectIndices(assets, studio.extraSubjects));
+      if (next === null) return;
+      // The box opens first and the dialog second, so cancelling the dialog
+      // still leaves somewhere to drag pictures you have already uploaded.
+      // Held in memory, not on the server: an empty box says nothing worth
+      // persisting, and the first picture in it is what makes it real.
+      studio.extraSubjects = [...(studio.extraSubjects || []), next];
+      renderMedia(studio.mode);
+      chooseSubjectMedia(next);
+    });
+  });
+  studio.root.querySelectorAll("[data-add-to-subject]").forEach((button) => {
+    button.addEventListener("click", () => chooseSubjectMedia(Number(button.dataset.addToSubject)));
+  });
+  studio.root.querySelectorAll("[data-remove-subject]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const index = Number(button.dataset.removeSubject);
+      const held = assetsForSubject(studio.assets.filter((asset) => asset.mode === mode), index);
+      studio.extraSubjects = (studio.extraSubjects || []).filter((item) => item !== index);
+      // Releasing, not deleting: the pictures go back to the tray, where they
+      // are still references. Nothing the user uploaded is thrown away.
+      if (held.length) await applySubject(held.map((asset) => asset.id), null);
+      else renderMedia(studio.mode);
+    });
+  });
   studio.root.querySelectorAll("[data-asset-id]").forEach((card) => {
     card.addEventListener("dragstart", (event) => {
       if (studio.requestBusy) {
@@ -749,7 +832,7 @@ function bindMediaActions(mode) {
       media.classList.remove("is-reordering");
       studio.dragGhost?.remove();
       studio.dragGhost = null;
-      studio.root.querySelectorAll(".is-dragging, .is-drop-before, .is-drop-after, .is-file-replace-target").forEach((item) => item.classList.remove("is-dragging", "is-drop-before", "is-drop-after", "is-file-replace-target"));
+      studio.root.querySelectorAll(".is-dragging, .is-drop-before, .is-drop-after, .is-file-replace-target, .is-subject-target").forEach((item) => item.classList.remove("is-dragging", "is-drop-before", "is-drop-after", "is-file-replace-target", "is-subject-target"));
     });
     card.addEventListener("dragover", (event) => {
       if (!studio.draggedAssetId && [...(event.dataTransfer.types || [])].includes("Files")) {
@@ -775,14 +858,35 @@ function bindMediaActions(mode) {
   });
   replaceEventListener(media, "dragover", "media", (event) => {
     event.preventDefault();
-    if (studio.draggedAssetId) event.dataTransfer.dropEffect = "move";
+    if (!studio.draggedAssetId) {
+      // Files from the desktop: light the box they would join.
+      if (mode !== "Reference" || ![...(event.dataTransfer.types || [])].includes("Files")) return;
+      studio.root.querySelectorAll(".is-subject-target").forEach((item) => item.classList.remove("is-subject-target"));
+      const over = event.target.closest("[data-subject-zone]");
+      if (over?.dataset.subjectZone) over.classList.add("is-subject-target");
+      return;
+    }
+    event.dataTransfer.dropEffect = "move";
+    if (mode !== "Reference") return;
+    const zone = event.target.closest("[data-subject-zone]");
+    studio.root.querySelectorAll(".is-subject-target").forEach((item) => item.classList.remove("is-subject-target"));
+    if (!zone) return;
+    const dragged = studio.assets.find((asset) => asset.id === studio.draggedAssetId);
+    const subject = zone.dataset.subjectZone ? Number(zone.dataset.subjectZone) : null;
+    // Lit only when the drop would actually change something, and only where
+    // the drop is allowed: a video hovering a subject box is not a target.
+    const allowed = subject === null || canJoinSubject(dragged);
+    if (allowed && (dragged?.subject ?? null) !== subject) zone.classList.add("is-subject-target");
   });
   replaceEventListener(media, "drop", "media", async (event) => {
     event.preventDefault();
     if (studio.requestBusy) return;
     const sourceId = event.dataTransfer.getData("application/x-h3ps-asset") || studio.draggedAssetId;
     const targetId = event.target.closest("[data-asset-id]")?.dataset.assetId;
-    studio.root.querySelectorAll(".is-file-replace-target").forEach((item) => item.classList.remove("is-file-replace-target"));
+    studio.root.querySelectorAll(".is-file-replace-target, .is-subject-target").forEach((item) => item.classList.remove("is-file-replace-target", "is-subject-target"));
+    // A drop that crosses a box boundary is a regrouping, not a reorder: the
+    // user is saying who this picture is, and <Picture N> must not move.
+    if (sourceId && mode === "Reference" && await dropIntoSubject(sourceId, event.target)) return;
     if (sourceId) {
       if (!targetId || sourceId === targetId) return;
       const modeAssets = studio.assets.filter((asset) => asset.mode === mode);
@@ -797,8 +901,57 @@ function bindMediaActions(mode) {
       return;
     }
     const files = [...event.dataTransfer.files];
-    uploadFiles(mode, files, replacementTargetForFileDrop(targetId, files.length));
+    const replacing = replacementTargetForFileDrop(targetId, files.length);
+    // Files dropped onto a box join that person, the same as files picked with
+    // its + button. Dropping them on the tray still leaves them ungrouped.
+    const zone = mode === "Reference" && !replacing ? event.target.closest("[data-subject-zone]") : null;
+    const subject = zone?.dataset.subjectZone ? Number(zone.dataset.subjectZone) : null;
+    uploadFiles(mode, files, replacing, { subject });
   });
+}
+
+/**
+ * Move a dragged card between the tray and a subject box.
+ *
+ * Returns whether it handled the drop, so a drop inside one box still falls
+ * through to the reorder path it has always used.
+ */
+async function dropIntoSubject(sourceId, target) {
+  const zone = target.closest("[data-subject-zone]");
+  if (!zone) return false;
+  const subject = zone.dataset.subjectZone ? Number(zone.dataset.subjectZone) : null;
+  const asset = studio.assets.find((item) => item.id === sourceId);
+  if (!asset) return false;
+  const current = asset.subject ?? null;
+  if (current === subject) return false;
+  // Video and audio stay in the tray. Refused here rather than by the server,
+  // so the card does not visibly jump into a box and then jump back out.
+  if (subject !== null && !canJoinSubject(asset)) {
+    showToast("Pictures only", "Only an image can define a subject. Video and audio stay above as scene references.");
+    return true;
+  }
+  // Dragging the last picture out of a box is re-sorting, not closing it. Left
+  // to vanish, the box after it would silently become Subject B mid-task.
+  await applySubject([sourceId], subject, { keepEmptied: current });
+  return true;
+}
+
+async function applySubject(assetIds, subject, { keepEmptied = null } = {}) {
+  try {
+    const result = await setMediaSubject(studio.sessionId, assetIds, subject);
+    studio.assets = result.assets;
+    studio.extraSubjects = openBoxesAfterMove(studio.extraSubjects, {
+      assets: studio.assets,
+      into: subject,
+      from: keepEmptied,
+    });
+    renderMedia(studio.mode);
+  } catch (error) {
+    // Re-rendered even on failure: the caller may have just uploaded these
+    // pictures, and they are loaded whether or not the grouping took.
+    renderMedia(studio.mode);
+    showToast(error.code || "Subject change failed", error.message, error.details);
+  }
 }
 
 function previewAsset(asset) {
@@ -815,7 +968,24 @@ function chooseMedia(mode, replaceAssetId = null) {
   input.click();
 }
 
-async function uploadFiles(mode, files, replaceAssetId = null) {
+/**
+ * Pick pictures straight into a subject box.
+ *
+ * Filling a box is the same gesture as adding media, so it uses the same file
+ * dialog -- which means ctrl-A, shift-click and ctrl-click already select
+ * several, because that is the operating system's dialog and not ours. Only
+ * images are offered: a box holds a person.
+ */
+function chooseSubjectMedia(subject) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.multiple = true;
+  input.accept = "image/*";
+  input.addEventListener("change", () => uploadFiles("Reference", [...input.files], null, { subject }));
+  input.click();
+}
+
+async function uploadFiles(mode, files, replaceAssetId = null, { subject = null } = {}) {
   if (!files.length || studio.requestBusy) return;
   const existing = studio.assets.filter((asset) => asset.mode === mode);
   if (mode !== "Reference" && !replaceAssetId && existing.length + files.length > MODES[mode].limit) {
@@ -837,6 +1007,14 @@ async function uploadFiles(mode, files, replaceAssetId = null) {
         null,
         { durationMs: 6000 },
       );
+    }
+    // The upload and the grouping are one action to the user, so the box fills
+    // in one step. Only the pictures: if they multi-selected a video by
+    // mistake it still lands, as a scene reference in the tray.
+    const joining = result.assets.filter(canJoinSubject).map((asset) => asset.id);
+    if (subject !== null && joining.length) {
+      await applySubject(joining, subject);
+      return;
     }
     renderMedia(studio.mode);
   } catch (error) {
@@ -1077,7 +1255,10 @@ async function clearCurrentMedia({ notify = true } = {}) {
   try {
     const result = await clearMedia(studio.sessionId, mediaModeFor(studio.mode));
     studio.assets = result.assets;
-
+    // The pictures are gone, so the boxes that held them are not waiting for
+    // anything. Left behind they would reopen as empty subjects nobody asked
+    // for, and "Add subject" would start from the wrong number.
+    studio.extraSubjects = [];
 
     renderMedia(studio.mode);
     if (notify) showToast("Media cleared", "The temporary session files were removed.");
@@ -4066,6 +4247,10 @@ function createStudio() {
     ),
     afterReset: () => {
       studio.assets = [];
+      // The media is gone, so an empty box is waiting for nothing. Left behind
+      // it reopens in a session the user just wiped, and Add subject starts
+      // from the wrong number.
+      studio.extraSubjects = [];
       root.querySelector("[data-video-brief]").value = "";
       root.querySelector("[data-output]").value = "";
       renderMedia(studio.mode);

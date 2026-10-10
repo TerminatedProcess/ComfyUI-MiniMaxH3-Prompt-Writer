@@ -64,3 +64,25 @@
 .h3ps-media-zoom figure { margin: 0; padding: calc(8px * var(--h3ps-interface-scale)); border: 1px solid var(--h3ps-border-selection); border-radius: 10px; background: var(--h3ps-menu-surface); box-shadow: 0 24px 60px rgba(0,0,0,.55); }
 .h3ps-media-zoom img { display: block; max-width: 60vw; max-height: 60vh; border-radius: 6px; object-fit: contain; background: var(--h3ps-media-well); }
 .h3ps-media-zoom figcaption { margin-top: calc(6px * var(--h3ps-interface-scale)); color: var(--h3ps-muted); font-size: var(--h3ps-font-label); text-align: center; }
+
+/* Subjects -- which pictures are evidence for which person. */
+.h3ps-subjects-hint { margin: calc(12px * var(--h3ps-interface-scale)) 0 calc(7px * var(--h3ps-interface-scale)); color: var(--h3ps-dim); font-size: var(--h3ps-font-caption); }
+.h3ps-subjects { display: flex; flex-direction: column; gap: calc(9px * var(--h3ps-interface-scale)); }
+.h3ps-subject { border: 1px solid var(--h3ps-border-media); border-radius: 9px; background: var(--h3ps-surface-subtle); padding: calc(8px * var(--h3ps-interface-scale)); transition: border-color 120ms ease, background-color 120ms ease; }
+.h3ps-subject > header { display: flex; align-items: center; gap: calc(7px * var(--h3ps-interface-scale)); margin-bottom: calc(7px * var(--h3ps-interface-scale)); }
+.h3ps-subject > header strong { color: var(--h3ps-text); font-size: var(--h3ps-font-label-sm); letter-spacing: .04em; text-transform: uppercase; }
+.h3ps-subject > header em { color: var(--h3ps-accent); font-size: var(--h3ps-font-label-sm); font-style: normal; font-weight: 600; }
+.h3ps-subject > header small { margin-left: auto; color: var(--h3ps-dim); font-size: var(--h3ps-font-caption); }
+.h3ps-subject > header button { display: grid; place-items: center; width: calc(20px * var(--h3ps-interface-scale)); height: calc(20px * var(--h3ps-interface-scale)); border: 0; border-radius: 5px; background: transparent; color: var(--h3ps-dim); cursor: pointer; }
+.h3ps-subject > header button:hover { background: var(--h3ps-control-hover-soft); color: var(--h3ps-text-hover); }
+.h3ps-subject > header button:disabled { opacity: .4; cursor: default; }
+/* An empty box must still be a target the eye can find, so it keeps its height. */
+.h3ps-subject .h3ps-assets:empty { min-height: calc(58px * var(--h3ps-interface-scale)); border: 1px dashed var(--h3ps-border-input); border-radius: 7px; }
+.h3ps-subject.is-subject-target, .h3ps-assets.is-subject-target { border-color: rgba(232,97,60,.6); background-color: var(--h3ps-control-hover); }
+.h3ps-add-subject { display: flex; align-items: center; justify-content: center; gap: calc(6px * var(--h3ps-interface-scale)); width: 100%; padding: calc(9px * var(--h3ps-interface-scale)); border: 1px dashed var(--h3ps-border-input); border-radius: 9px; background: transparent; color: var(--h3ps-muted); cursor: pointer; }
+.h3ps-add-subject:hover { border-color: rgba(232,97,60,.42); color: var(--h3ps-text-hover); }
+.h3ps-add-subject:disabled { opacity: .4; cursor: default; }
+.h3ps-add-subject span { color: var(--h3ps-text-media-add); font-size: var(--h3ps-font-control-sm); font-weight: 630; }
+.h3ps-add-subject small { color: var(--h3ps-dim); font-size: var(--h3ps-font-caption); }
+.h3ps-subject > header small { margin-left: auto; }
+.h3ps-subject > header [data-add-to-subject] { margin-left: 0; }

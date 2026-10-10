@@ -102,6 +102,10 @@ export const reorderMedia = (sessionId, mode, assetIds) => post(
   "/media/reorder",
   { session_id: sessionId, mode, asset_ids: assetIds },
 );
+export const setMediaSubject = (sessionId, assetIds, subject) => post(
+  "/media/subject",
+  { session_id: sessionId, asset_ids: assetIds, subject },
+);
 export const getMediaManifest = (sessionId, mode) => request(
   `/media/manifest?session_id=${encodeURIComponent(sessionId)}&mode=${encodeURIComponent(mode)}`,
 );

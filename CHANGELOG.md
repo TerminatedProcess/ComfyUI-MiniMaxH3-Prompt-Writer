@@ -2,6 +2,14 @@
 
 ## 0.4.7 - unreleased
 
+### Added
+
+- **Group your reference pictures by person.** Under the media tray there is now an **Add subject** tile. It opens a box and asks for pictures — select all of that person's at once, with Ctrl+A, Shift-click or Ctrl-click, since it is your own system's file dialog. Every picture in a box is treated as the same body from a different angle; a second box is a second person. Six pictures — three of a woman and three of a man — used to be guesswork: the build read them with no idea which was which, and either invented six people or averaged them into one. It is now told.
+- You can also drag pictures between the tray and the boxes, drop files from the desktop straight onto a box, or use the **+** in a box header to add more to that person later. Cancelling the file dialog leaves the box open and empty so you can fill it by dragging.
+- Pictures left in the tray still describe **nobody**. They are scene, style and wardrobe evidence, exactly as before, which is what keeps a setting reference working.
+- Because the boxes say how many people there are, a build that describes a different number now **says so** instead of quietly handing back the wrong document. Grouping two subjects and getting three people back is reported in the conversation, with both numbers.
+- Grouping never moves a `<Picture N>` tag. Dragging a card into a box says who she is; a tag you have already typed into the brief keeps pointing at the same file.
+
 ### Changed
 
 - **Generate restarts a run you have already corrected.** Press Generate, notice the duration says 5 seconds when you wanted 10, fix it and press again: the run in flight is abandoned and a fresh one starts with the corrected inputs. Nothing from the discarded run is kept. With the inputs untouched the button still simply stops, because it is the only control that can.

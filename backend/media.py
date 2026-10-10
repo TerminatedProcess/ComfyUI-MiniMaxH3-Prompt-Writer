@@ -14,6 +14,7 @@ import av
 import folder_paths
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from .generic import MAX_PEOPLE
 from .targets import mode_limits as _mode_limits
 from .targets.h3 import REFERENCE_LIMITS
 
@@ -218,6 +219,10 @@ class MediaStore:
 
     def public(self, asset: dict[str, Any]) -> dict[str, Any]:
         result = {key: value for key, value in asset.items() if not key.startswith("_")}
+        # Sessions stored before subjects existed have no such key, and the
+        # studio reads it on every card: ungrouped is the honest answer for
+        # them, and it is what they already behaved as.
+        result.setdefault("subject", None)
         result["content_url"] = f"/h3studio/media/{asset['id']}/content?session_id={asset['session_id']}"
         content_revision = asset.get("content_revision", asset.get("sample_index", 0))
         result["source_url"] = f"{result['content_url']}&kind=source&revision={asset.get('_source_revision', 0)}"
@@ -294,6 +299,12 @@ class MediaStore:
                 if content_type and content_type != "application/octet-stream"
                 else mimetypes.guess_type(filename)[0] or "application/octet-stream"
             ),
+            # Which person this picture is evidence for, or None for the scene,
+            # style and wardrobe references that describe nobody. The document
+            # has held one block per person for a while; this is the missing
+            # half of it -- which FILE belongs to which of them -- and without
+            # it the build has to guess from the pixels on every run.
+            "subject": None,
             "_original_path": str(stored_path),
         }
         try:
@@ -366,6 +377,9 @@ class MediaStore:
         if old_asset["mode"] == "Reference" and replacement["type"] == old_asset["type"]:
             replacement["reference"] = old_asset.get("reference")
             replacement["_reference_reservation"] = old_asset.get("_reference_reservation")
+            # A better photo of the same person is still that person: swapping
+            # the file must not silently empty her subject box.
+            replacement["subject"] = old_asset.get("subject")
             self._assign_reference_identity(assets, replacement)
         else:
             self._renumber(assets, old_asset["mode"])
@@ -523,6 +537,39 @@ class MediaStore:
         ordered = iter(by_id[asset_id] for asset_id in ordered_ids)
         self.sessions[session_id] = [next(ordered) if asset["mode"] == mode else asset for asset in assets]
         self._renumber(self.sessions[session_id], mode)
+        self._save(session_id)
+        return self.list(session_id)
+
+    def set_subject(self, session_id: str, asset_ids: list[str], subject: int | None) -> list[dict[str, Any]]:
+        """Bind pictures to a person, or release them back to the scene.
+
+        Takes a list because emptying a subject box is one gesture: releasing
+        its nine pictures one request at a time would leave the box half-gone
+        if the fourth failed.
+
+        Deliberately NOT a renumbering operation. A Reference tag is sticky --
+        `_assign_reference_identity` keeps an existing one, and the reservation
+        it carries survives an edit -- so <Picture 3> stays <Picture 3> however
+        it is grouped. Dragging a card into a box must not repoint a tag the
+        user has already typed into the brief.
+        """
+        if subject is not None and not 1 <= subject <= MAX_PEOPLE:
+            raise MediaError("INVALID_SUBJECT", f"A subject must be between 1 and {MAX_PEOPLE}.")
+        # Through `assets()`, not `get()`: `get` reads whatever is already in
+        # memory, so after a restart the first regrouping of a session restored
+        # from disk would fail with MEDIA_NOT_FOUND. `reorder` loads the same
+        # way for the same reason.
+        self.assets(session_id)
+        # Resolved before anything is written: a bad ID in the list must not
+        # leave half the box moved.
+        assets = [self.get(session_id, asset_id) for asset_id in asset_ids]
+        for asset in assets:
+            if asset["mode"] != "Reference":
+                raise MediaError("INVALID_SUBJECT", "Only reference media can belong to a subject.")
+            if subject is not None and asset["type"] != "image":
+                raise MediaError("INVALID_SUBJECT", "Only a picture can define a subject.")
+        for asset in assets:
+            asset["subject"] = subject
         self._save(session_id)
         return self.list(session_id)
 

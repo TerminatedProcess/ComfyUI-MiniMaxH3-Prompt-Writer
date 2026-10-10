@@ -15,6 +15,7 @@ import "./editor_interactions.mjs";
 import "./media_tools.mjs";
 import "./workflow_media.mjs";
 import "./floating_media.mjs";
+import "./media_subjects.mjs";
 
 const source = await readFile(new URL("../web/compat.js", import.meta.url), "utf8");
 const encoded = Buffer.from(source).toString("base64");
@@ -897,13 +898,38 @@ test("Reference assets replace one dropped file and append multiple dropped file
   assert.match(mainSource, /button\.blur\(\);\s*chooseMedia\(mode, button\.dataset\.replaceAsset\)/);
   assert.match(mainSource, /is-file-replace-target/);
   assert.doesNotMatch(mainSource, /Choose one replacement/);
-  assert.match(mainSource, /uploadFiles\(mode, files, replacementTargetForFileDrop\(targetId, files\.length\)\)/);
+  // The replacement decision still comes from `replacementTargetForFileDrop`,
+  // and still from the drop target's id and the file count. It is now named
+  // first because a file drop also has to know which subject box it landed in.
+  assert.match(mainSource, /const replacing = replacementTargetForFileDrop\(targetId, files\.length\);/);
+  assert.match(mainSource, /uploadFiles\(mode, files, replacing, \{ subject \}\)/);
+  // A replacement is never also a regrouping: one file onto one card replaces
+  // it and nothing moves between boxes.
+  assert.match(mainSource, /mode === "Reference" && !replacing \? event\.target\.closest\("\[data-subject-zone\]"\) : null/);
 
   assert.equal(fileCountFromDataTransfer({ items: [{ kind: "file" }] }), 1);
   assert.equal(fileCountFromDataTransfer({ items: [{ kind: "file" }, { kind: "file" }] }), 2);
   assert.equal(fileCountFromDataTransfer({ files: [{}, {}, {}] }), 3);
   assert.equal(replacementTargetForFileDrop("asset-2", 1), "asset-2");
   assert.equal(replacementTargetForFileDrop("asset-2", 2), null);
+});
+
+test("Add subject imports pictures through the operating system's own file dialog", () => {
+  // Multi-select is not ours to implement: ctrl-A, shift-click and ctrl-click
+  // are the OS dialog's, and they work as long as the input says `multiple`.
+  assert.match(mainSource, /function chooseSubjectMedia\(subject\) \{[\s\S]*?input\.multiple = true;/);
+  // A box holds a person, so the dialog offers pictures only.
+  assert.match(mainSource, /function chooseSubjectMedia\(subject\) \{[\s\S]*?input\.accept = "image\/\*";/);
+  assert.match(mainSource, /uploadFiles\("Reference", \[\.\.\.input\.files\], null, \{ subject \}\)/);
+  // The box opens before the dialog, so cancelling still leaves somewhere to
+  // drag pictures that are already uploaded.
+  assert.match(mainSource, /studio\.extraSubjects = \[\.\.\.\(studio\.extraSubjects \|\| \[\]\), next\];\s*\n\s*renderMedia\(studio\.mode\);\s*\n\s*chooseSubjectMedia\(next\);/);
+  // Only the pictures join the person: a video in the same selection still
+  // lands, as a scene reference in the tray.
+  assert.match(mainSource, /result\.assets\.filter\(canJoinSubject\)\.map\(\(asset\) => asset\.id\)/);
+  // Each box can be topped up later without re-opening the whole flow.
+  assert.match(mainSource, /data-add-to-subject="\$\{index\}"/);
+  assert.match(mainSource, /chooseSubjectMedia\(Number\(button\.dataset\.addToSubject\)\)/);
 });
 
 test("media card overlays stay inside the thumbnail and below previews", () => {

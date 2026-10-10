@@ -74,6 +74,20 @@ Rules:
 - Leave a field out of "scene" entirely rather than writing "unknown", "none" or "not specified".
 - No commentary, no Markdown, no code fences, no extra keys."""
 
+SUBJECTS_CLAUSE = (
+    "SUBJECTS. The user has grouped the reference pictures by person, and each group is listed with its "
+    "pictures below. That grouping is a FACT, not a suggestion:\n"
+    "- Every picture in one group is the SAME body from a different angle, moment or outfit. Write ONE "
+    "\"people\" object for the group, drawing on all of its pictures together. Two pictures of her hair and "
+    "her dress are one woman, not two.\n"
+    "- Pictures in different groups are DIFFERENT people. Never merge them, and never move a trait across.\n"
+    "- Write the groups in the order they are numbered: group 1 is the first \"people\" object, group 2 the "
+    "second, and so on.\n"
+    "- A picture in no group describes NOBODY. It is evidence for the scene, the style or the wardrobe, and it "
+    "must not become a person.\n"
+    "- Write exactly as many \"people\" objects as there are groups, unless the brief itself puts someone else "
+    "in the shot."
+)
 STORY_BUILD_CLAUSE = (
     "Story builder is ON: fill every field you reasonably can, inventing specific supporting detail -- staging, "
     "wardrobe, light, weather, mood, camera -- so the document describes one deliberate shot rather than a sketch. "
@@ -311,9 +325,13 @@ def quoted_from_brief(quote: Any, brief: str) -> bool:
     return text in _normalized_for_quote(brief)
 
 
-def build_instructions(*, nsfw: bool = True, story: bool, heat: int | None = None) -> str:
+def build_instructions(
+    *, nsfw: bool = True, story: bool, heat: int | None = None, subjects: int = 0
+) -> str:
     level = heat_levels.resolve(heat=heat, nsfw=nsfw)
     parts = [BUILD_INSTRUCTIONS, STORY_BUILD_CLAUSE if story else FAITHFUL_BUILD_CLAUSE]
+    if subjects:
+        parts.append(SUBJECTS_CLAUSE)
     parts.append(heat_levels.clause(level))
     # Story builder off used to cap the dial here, so a user asking for Explicit
     # quietly got Allowed. The dial is the user talking: it develops what it
@@ -323,15 +341,76 @@ def build_instructions(*, nsfw: bool = True, story: bool, heat: int | None = Non
     return "\n\n".join(parts)
 
 
-def turn_instructions(*, nsfw: bool = True, story: bool, heat: int | None = None) -> str:
+def turn_instructions(
+    *, nsfw: bool = True, story: bool, heat: int | None = None, subjects: int = 0
+) -> str:
     parts = [TURN_INSTRUCTIONS]
     if story:
         parts.append(
             "Story builder is ON, so you may also fill fields the user has not addressed when the change implies "
             "them -- but never overwrite a fact they gave."
         )
+    # Carried into the turn as well as the build: a correction about her dress
+    # must not be the moment the two pictures of her become two women.
+    if subjects:
+        parts.append(SUBJECTS_CLAUSE)
     parts.append(heat_levels.clause(heat_levels.resolve(heat=heat, nsfw=nsfw)))
     return "\n\n".join(parts)
+
+
+def subject_groups(manifest: dict[str, Any]) -> dict[int, list[str]]:
+    """Which reference tags belong to which person, in group order.
+
+    Derived from the media manifest rather than stored anywhere else: the
+    binding lives on the asset, which survives a Reset and a rebuild, and two
+    copies of it would be two things to keep in step.
+    """
+    groups: dict[int, list[str]] = {}
+    for asset in (manifest or {}).get("assets", []):
+        index = _stored_subject(asset)
+        if index is None:
+            continue
+        groups.setdefault(index, []).append(asset.get("reference") or asset.get("filename") or "")
+    return {index: groups[index] for index in sorted(groups)}
+
+
+def _stored_subject(asset: dict[str, Any]) -> int | None:
+    """One reading of an asset's subject, shared by every caller here.
+
+    Range-checked as well as type-checked, so a hand-edited manifest cannot
+    produce a seventh group the studio has no box for -- `media_subjects.js`
+    clamps the same way, and a value only one side accepts is a disagreement
+    about who is in the shot.
+    """
+    index = (asset or {}).get("subject")
+    if not isinstance(index, int) or isinstance(index, bool):
+        return None
+    return index if 1 <= index <= generic.MAX_PEOPLE else None
+
+
+def _reference_lines(manifest: dict[str, Any]) -> str:
+    """The reference list the model reads, with each picture's group on it.
+
+    Groups are NUMBERED, never lettered. `_named_people` puts letters in this
+    same message, meaning document people -- "A is Liz" -- and a second letter
+    scheme for the picture groups would have one message asserting two things
+    about "A". They say the same thing only while the document matches the
+    current grouping, which is exactly when the user has just regrouped and it
+    does not.
+    """
+    groups = subject_groups(manifest)
+    numbers = {index: position for position, index in enumerate(groups, start=1)}
+    lines = [
+        f"{asset.get('reference') or asset.get('filename')}: {asset.get('filename')} ({asset.get('type')})"
+        + (f" -- group {numbers[_stored_subject(asset)]}" if _stored_subject(asset) in numbers else "")
+        for asset in (manifest or {}).get("assets", [])
+    ]
+    if groups:
+        roll = "; ".join(
+            f"group {numbers[index]} is {', '.join(tags)}" for index, tags in groups.items()
+        )
+        lines.append(f"\nThe user grouped these pictures by person: {roll}.")
+    return "\n".join(lines) or "None"
 
 
 def _named_people(doc: dict[str, Any] | None) -> str:
@@ -370,11 +449,8 @@ def assemble_build(
 ) -> dict[str, Any]:
     """One request that reads the references and writes the whole document."""
     level = heat_levels.resolve(heat=heat, nsfw=nsfw)
-    instructions = build_instructions(heat=level, story=story)
-    references = "\n".join(
-        f"{asset.get('reference') or asset.get('filename')}: {asset.get('filename')} ({asset.get('type')})"
-        for asset in manifest.get("assets", [])
-    ) or "None"
+    instructions = build_instructions(heat=level, story=story, subjects=len(subject_groups(manifest)))
+    references = _reference_lines(manifest)
     existing = ""
     if doc is not None and not generic.is_empty(doc):
         existing = (
@@ -705,7 +781,7 @@ def assemble_turn(
     put the mechanism in their way.
     """
     level = heat_levels.resolve(heat=heat, nsfw=nsfw)
-    instructions = turn_instructions(heat=level, story=story)
+    instructions = turn_instructions(heat=level, story=story, subjects=len(subject_groups(manifest)))
     records = generic.records(doc)
     document = {
         key: {
@@ -720,10 +796,7 @@ def assemble_turn(
         f"{'You' if turn['role'] == 'assistant' else 'User'}: {turn['text']}"
         for turn in (conversation or [])[-8:]
     ]
-    references = "\n".join(
-        f"{asset.get('reference') or asset.get('filename')}: {asset.get('filename')} ({asset.get('type')})"
-        for asset in manifest.get("assets", [])
-    ) or "None"
+    references = _reference_lines(manifest)
     standing = goal_ledger.render(goals)
     user_content = (
         f"Current document (origin 'user' and 'override' are the user's own choices; 'override' deliberately "
@@ -759,6 +832,52 @@ def assemble_turn(
             {"role": "user", "content": user_content},
         ],
     }
+
+
+def people_mismatch(text: str, expected: int) -> str:
+    """What to tell the user when the grouping and the answer disagree.
+
+    The whole reason grouping beats a "same person" switch: the expected count
+    is KNOWN, so this is a check rather than a hope. Reported, never corrected
+    -- collapsing the extra people here would bin whatever the later pictures
+    contributed and leave relations pointing at a body that no longer exists.
+    """
+    if expected < 1:
+        return ""
+    try:
+        parsed, _ = _parse_json_object(text, "INVALID_GENERIC_BUILD", "")
+    except ConversationError:
+        return ""
+    # The same three places `apply_build` looks. Checking only the top level
+    # would pass silently on exactly the answers it has to accept: asked for
+    # "people" at the top, the model regularly nests it under "scene".
+    raw = next(
+        (
+            candidate
+            for candidate in (
+                parsed.get("people"),
+                (parsed.get("scene") or {}).get("people") if isinstance(parsed.get("scene"), dict) else None,
+                (parsed.get("observed") or {}).get("people") if isinstance(parsed.get("observed"), dict) else None,
+            )
+            if isinstance(candidate, list)
+        ),
+        None,
+    )
+    if raw is None:
+        return ""
+    # Clamped the way `_people_map` clamps: reporting "described 8" while the
+    # Subject rows the note tells them to check show six is a worse answer than
+    # the number being slightly conservative.
+    described = min(
+        len([person for person in raw if isinstance(person, dict) and person]),
+        generic.MAX_PEOPLE,
+    )
+    if not described or described == expected:
+        return ""
+    return (
+        f" You grouped {expected} subject{'s' if expected > 1 else ''}, but the model described"
+        f" {described} {'people' if described > 1 else 'person'} -- check the Subject rows, or Generate again."
+    )
 
 
 def apply_build(

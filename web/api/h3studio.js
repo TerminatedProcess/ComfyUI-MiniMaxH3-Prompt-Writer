@@ -51,6 +51,7 @@ export const expandBrief = (payload) => post("/generic/expand", payload);
 export const describeAsset = (payload) => post("/generic/describe", payload);
 export const editGenericField = (payload) => post("/generic/field", payload);
 export const renamePerson = (payload) => post("/generic/name", payload);
+export const reorderPersonNames = (payload) => post("/generic/names", payload);
 export const changeGoal = (payload) => post("/goals", payload);
 export const assemble = (payload) => post("/assemble", payload);
 export const generate = (payload) => post("/generate", payload);
@@ -105,6 +106,10 @@ export const reorderMedia = (sessionId, mode, assetIds) => post(
 export const setMediaSubject = (sessionId, assetIds, subject) => post(
   "/media/subject",
   { session_id: sessionId, asset_ids: assetIds, subject },
+);
+export const orderMediaSubjects = (sessionId, groups) => post(
+  "/media/subjects/order",
+  { session_id: sessionId, groups },
 );
 export const getMediaManifest = (sessionId, mode) => request(
   `/media/manifest?session_id=${encodeURIComponent(sessionId)}&mode=${encodeURIComponent(mode)}`,

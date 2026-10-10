@@ -23,6 +23,7 @@ import {
   describeAsset,
   editGenericField,
   renamePerson,
+  reorderPersonNames,
   expandBrief,
   getSession,
   getTargets,
@@ -653,10 +654,12 @@ export function createWriterStage(host) {
   async function reset({ scope = "all", clearMedia = true, confirm = true, notify = true } = {}) {
     if (confirm && !host.confirmReset()) return false;
     let done = false;
-    await withBusy(scope === "prompts" ? "Clearing prompts" : "Resetting", async () => {
+    await withBusy(scope === "all" ? "Resetting" : "Clearing prompts", async () => {
       // Emptied before the session lands, so `onSessionChanged` sees an empty box
       // and has nothing to restore into it.
-      const brief = host.briefElement?.();
+      // "downstream" keeps the brief: the user typed it, it sits upstream of
+      // the document, and losing it to a rename would be a punishment.
+      const brief = scope === "downstream" ? null : host.briefElement?.();
       if (brief) brief.value = "";
       applySession(await resetSession({ session_id: host.sessionId(), scope, clear_media: clearMedia }));
       if (scope === "all") {
@@ -691,7 +694,7 @@ export function createWriterStage(host) {
     const current = (session.names || {})[String(person)] || "";
     editing = `name:${person}`;
     button.outerHTML = `<input type="text" class="h3ps-generic-input h3ps-person-input" value="${escape(current)}"
-      maxlength="40" aria-label="Name for this person">`;
+      list="h3ps-subject-roster" maxlength="40" aria-label="Name for this person">`;
     const input = query(".h3ps-person-input");
     input.focus();
     input.select();
@@ -699,9 +702,14 @@ export function createWriterStage(host) {
       const next = input.value.trim();
       editing = null;
       if (next === current) { render(); return; }
+      // The same gate the subject boxes use. Awaited BEFORE withBusy, never
+      // inside it: `withBusy` returns early while busy, so a clear nested in a
+      // rename would silently skip the rename.
+      if (host.confirmMediaChange && !await host.confirmMediaChange()) { render(); return; }
       await withBusy("Renaming", async () => {
         applySession(await renamePerson({ session_id: host.sessionId(), person, name: next }));
       });
+      host.rememberSubjectName?.(next);
       render();
     };
     input.addEventListener("keydown", (event) => {
@@ -872,6 +880,28 @@ export function createWriterStage(host) {
     },
     registry: () => registry,
     session: () => session,
+    /** Whether anything downstream of the subjects exists to be invalidated. */
+    hasDownstream: () => Boolean(
+      session && (
+        session.field_order?.some((key) => session.fields?.[key]?.value)
+        || Object.keys(session.outputs || {}).length
+        || (session.edges || []).length
+        || (session.goals || []).length
+        || (session.conversation || []).length
+      ),
+    ),
+    /** Drop everything the process wrote, keeping the brief, media and names. */
+    clearDownstream: () => reset({ scope: "downstream", clearMedia: false, confirm: false, notify: false }),
+    /** Carry every handle to wherever its subject box ended up. */
+    reorderNames: async (names) => {
+      applySession(await reorderPersonNames({ session_id: host.sessionId(), names }));
+      render();
+    },
+    /** Set a person's handle from the media side's subject box. */
+    renamePerson: async (person, name) => {
+      applySession(await renamePerson({ session_id: host.sessionId(), person, name }));
+      render();
+    },
     variantsFor: (mode) => targetFor(mode)?.variants || [],
     targetFor,
     targetsForStage,

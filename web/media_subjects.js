@@ -55,6 +55,37 @@ export function subjectLetter(indices, index) {
   return position < 0 ? "" : LETTERS[position] || String(position + 1);
 }
 
+/**
+ * Which of the six subject colours a box wears.
+ *
+ * By position, like the letter, so Subject A is always the first colour. The
+ * colour is carried onto every card inside the box as well: mid-drag the box
+ * chrome is the one thing you cannot see, and "which person is this picture"
+ * is exactly the question being answered.
+ */
+export function subjectTone(indices, index) {
+  const position = indices.indexOf(index);
+  return position < 0 ? "" : `subject-${(position % LETTERS.length) + 1}`;
+}
+
+/**
+ * The grouping that a box move produces, as ordered lists of asset ids.
+ *
+ * Box order IS person order -- the first box is person A and group 1 in the
+ * prompt -- so reordering boxes has to be written in one pass. Done as a
+ * sequence of single moves, two boxes would briefly share an index and merge
+ * into one person.
+ */
+export function reorderedGroups(assets = [], indices = [], from = null, to = null) {
+  const order = indices.filter((index) => assetsForSubject(assets, index).length);
+  const start = order.indexOf(from);
+  const end = order.indexOf(to);
+  if (start < 0 || end < 0 || start === end) return null;
+  const moved = [...order];
+  moved.splice(end, 0, ...moved.splice(start, 1));
+  return moved.map((index) => assetsForSubject(assets, index).map((asset) => asset.id));
+}
+
 export function assetsForSubject(assets = [], index) {
   return assets.filter((asset) => storedIndex(asset) === index);
 }
@@ -81,6 +112,27 @@ export function openBoxesAfterMove(open = [], { assets = [], into = null, from =
   result.delete(into);
   if (from !== null && from !== into && !assetsForSubject(assets, from).length) result.add(from);
   return [...result].sort((a, b) => a - b);
+}
+
+/**
+ * Names, carried to wherever their box ended up.
+ *
+ * A name is stored against a person NUMBER, which is a box's position -- so
+ * anything that shifts positions moves the names under them. Drag Bob's box
+ * above Liz's and, without this, the box holding Bob's pictures is labelled
+ * Liz, and the next build describes him by her name.
+ *
+ * Takes the filled box indices before and after the change. A box that is gone
+ * takes its name with it; one that is new starts without one.
+ */
+export function remappedNames(previous = [], next = [], names = {}) {
+  const result = {};
+  next.forEach((index, position) => {
+    const was = previous.indexOf(index);
+    const name = was < 0 ? "" : names[String(was + 1)];
+    if (typeof name === "string" && name.trim()) result[String(position + 1)] = name;
+  });
+  return result;
 }
 
 /**

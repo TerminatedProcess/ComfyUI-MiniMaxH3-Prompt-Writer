@@ -8,6 +8,17 @@
   --h3ps-canvas-text: #e8e8ec;
   --h3ps-canvas-text-muted: #aeb0b6;
   --h3ps-canvas-link: #a8c8e8;
+  /* Six subject colours, assigned by box position. Distinguishable from one
+     another at a 3px strip and readable in both themes, which is the whole job
+     -- they answer "whose picture is this", nothing else. The first is the
+     accent, so a single-subject session looks like the rest of the studio. */
+  --h3ps-subject-1: #e8613c;
+  --h3ps-subject-2: #4f93c0;
+  --h3ps-subject-3: #5fa37a;
+  --h3ps-subject-4: #a874bd;
+  --h3ps-subject-5: #c4a03f;
+  --h3ps-subject-6: #c05f72;
+  --h3ps-subject-ink: #11131a;
   --h3ps-interface-scale: 1;
   --h3ps-interface-scale-soft: 1;
   --h3ps-radius-sm: 6px;

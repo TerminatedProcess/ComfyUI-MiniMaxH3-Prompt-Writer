@@ -6,6 +6,9 @@ import {
   canJoinSubject,
   nextSubjectIndex,
   openBoxesAfterMove,
+  remappedNames,
+  reorderedGroups,
+  subjectTone,
   subjectIndices,
   subjectLetter,
   unassignedAssets,
@@ -90,4 +93,60 @@ test('The remove button closes the box rather than keeping it open', () => {
   const after = [picture('a', null)];
   assert.deepEqual(openBoxesAfterMove([2], { assets: after, into: null, from: null }), [2]);
   assert.deepEqual(openBoxesAfterMove([2], { assets: after, into: 2, from: null }), []);
+});
+
+test('Colours follow box position, so Subject A always wears the first one', () => {
+  const indices = subjectIndices([picture('a', 1), picture('b', 3)]);
+  assert.equal(subjectTone(indices, 1), 'subject-1');
+  assert.equal(subjectTone(indices, 3), 'subject-2');
+  assert.equal(subjectTone(indices, 2), '');
+});
+
+test('Reordering boxes produces the whole grouping, in the new order', () => {
+  // Box order is person order, so this has to be sent as the complete desired
+  // state -- applied as single moves, two boxes would briefly share an index
+  // and merge into one person.
+  const assets = [picture('a', 1), picture('b', 2), picture('c', 2), picture('d', 3)];
+  const indices = subjectIndices(assets);
+  assert.deepEqual(reorderedGroups(assets, indices, 3, 1), [['d'], ['a'], ['b', 'c']]);
+  assert.deepEqual(reorderedGroups(assets, indices, 1, 3), [['b', 'c'], ['d'], ['a']]);
+});
+
+test('A box reorder that changes nothing is not sent', () => {
+  const assets = [picture('a', 1), picture('b', 2)];
+  const indices = subjectIndices(assets);
+  assert.equal(reorderedGroups(assets, indices, 1, 1), null);
+  assert.equal(reorderedGroups(assets, indices, 1, 9), null);
+  assert.equal(reorderedGroups(assets, indices, null, 2), null);
+});
+
+test('An empty box is not part of the order it cannot be written to', () => {
+  // Only filled boxes exist on the server, so an empty one between two filled
+  // ones must not take a slot in the grouping that gets sent.
+  const assets = [picture('a', 1), picture('b', 3)];
+  assert.deepEqual(reorderedGroups(assets, subjectIndices(assets, [2]), 3, 1), [['b'], ['a']]);
+});
+
+test('A name follows its box when the boxes are reordered', () => {
+  // Liz is box 1, Bob is box 2. Drag Bob above Liz. Without this, the box now
+  // holding Bob's pictures is labelled Liz -- and the next build describes him
+  // by her name, which is the exact failure subjects exist to prevent.
+  const names = { 1: 'Liz', 2: 'Bob' };
+  assert.deepEqual(remappedNames([1, 2], [2, 1], names), { 1: 'Bob', 2: 'Liz' });
+});
+
+test('Releasing a box takes its name with it and shifts the rest up', () => {
+  const names = { 1: 'Liz', 2: 'Bob', 3: 'Ada' };
+  assert.deepEqual(remappedNames([1, 2, 3], [2, 3], names), { 1: 'Bob', 2: 'Ada' });
+  assert.deepEqual(remappedNames([1, 2, 3], [1, 3], names), { 1: 'Liz', 2: 'Ada' });
+});
+
+test('A new box starts without a name instead of inheriting one', () => {
+  assert.deepEqual(remappedNames([1], [1, 4], { 1: 'Liz' }), { 1: 'Liz' });
+  assert.deepEqual(remappedNames([], [1], {}), {});
+});
+
+test('Unnamed people do not leave blanks in the roll', () => {
+  assert.deepEqual(remappedNames([1, 2], [2, 1], { 2: 'Bob' }), { 1: 'Bob' });
+  assert.deepEqual(remappedNames([1, 2], [2, 1], { 1: '   ' }), {});
 });

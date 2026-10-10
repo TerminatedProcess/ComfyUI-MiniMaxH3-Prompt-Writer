@@ -300,6 +300,58 @@ class GenericRouteTests(unittest.TestCase):
         self.assertEqual(payload["session"]["conversation"], [])
         self.assertEqual(payload["session"]["inputs"]["brief"], "")
 
+    def test_a_subject_change_clears_the_written_work_but_keeps_the_brief_and_the_names(self):
+        """What a rename or a regrouping costs.
+
+        Everything the process wrote is derived from who is in the shot, so it
+        goes. The brief does not -- the user typed that, it sits upstream of
+        the document, and losing it to a rename would be a punishment. The
+        names stay with the people, not with the document being rebuilt.
+        """
+        self.answers.append(json.dumps({"scene": {"subject": "Bob", "mood": "wistful"}}))
+        self.call("POST", "/generic/build", {"session_id": SESSION, "model_id": "m", "brief": "Bob waits"})
+        self.call("POST", "/goals", {"session_id": SESSION, "text": "never mention a brand"})
+        self.call("POST", "/generic/name", {"session_id": SESSION, "person": 1, "name": "Liz"})
+        state = session_store.load(SESSION)
+        session_store.record_output(state, "Krea2", prompt="a compiled prose prompt")
+        session_store.save(state)
+
+        status, payload = self.call("POST", "/session/reset", {"session_id": SESSION, "scope": "downstream"})
+        self.assertEqual(status, 200)
+        session = payload["session"]
+        self.assertEqual(session["unspecified"], list(generic.FIELDS), "the document is gone")
+        self.assertEqual(session["outputs"], {}, "the compiled prompts are gone")
+        self.assertEqual(session["goals"], [], "the goals are gone")
+        self.assertEqual(session["conversation"], [], "the conversation is gone")
+        self.assertEqual(session["inputs"]["brief"], "Bob waits", "the brief is the user's, not the process's")
+        self.assertEqual(session["names"], {"1": "Liz"}, "the name belongs to the person, not the document")
+
+    def test_names_can_be_carried_to_where_their_boxes_ended_up(self):
+        """A name belongs to a person number, which is a box position.
+
+        Reorder the boxes and the names under them shift, so the whole roll is
+        rewritten in one request rather than a sequence of renames that could
+        half-apply and leave two people sharing a name.
+        """
+        self.call("POST", "/generic/name", {"session_id": SESSION, "person": 1, "name": "Liz"})
+        self.call("POST", "/generic/name", {"session_id": SESSION, "person": 2, "name": "Bob"})
+        status, payload = self.call("POST", "/generic/names", {
+            "session_id": SESSION, "names": {"1": "Bob", "2": "Liz"},
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["session"]["names"], {"1": "Bob", "2": "Liz"})
+
+    def test_a_name_left_out_of_the_roll_is_dropped(self):
+        self.call("POST", "/generic/name", {"session_id": SESSION, "person": 1, "name": "Liz"})
+        self.call("POST", "/generic/name", {"session_id": SESSION, "person": 2, "name": "Bob"})
+        _status, payload = self.call("POST", "/generic/names", {"session_id": SESSION, "names": {"1": "Bob"}})
+        self.assertEqual(payload["session"]["names"], {"1": "Bob"}, "the released box took its name with it")
+
+    def test_a_malformed_roll_is_refused(self):
+        for names in ("Liz", {"one": "Liz"}, {"1": 2}):
+            status, _payload = self.call("POST", "/generic/names", {"session_id": SESSION, "names": names})
+            self.assertEqual(status, 400, names)
+
     def test_an_unknown_clear_scope_is_refused(self):
         status, payload = self.call("POST", "/session/reset", {"session_id": SESSION, "scope": "half"})
         self.assertEqual(status, 400)

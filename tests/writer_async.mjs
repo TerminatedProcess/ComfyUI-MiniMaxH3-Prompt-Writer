@@ -32,6 +32,9 @@ test("upload completion renders the current mode, including replacement", async 
       studio, uploadMedia: () => pending.promise,
       showToast() {}, hideToast() {}, audioWasAdded: () => false,
       renderMedia: (mode) => renders.push(mode),
+      setMediaBusy() {},
+      canJoinSubject: (asset) => asset.type === "image",
+      applySubject: async () => {},
     });
     const operation = api.uploadFiles("Reference", [{}], replacement);
     studio.mode = "I2VA";
@@ -40,6 +43,72 @@ test("upload completion renders the current mode, including replacement", async 
     assert.deepEqual(renders, ["I2VA"]);
     assert.equal(studio.assets[0].mode, "Reference");
   }
+});
+
+test("the studio says it is working before it starts waiting", async () => {
+  // The bug: the only progress feedback came AFTER an awaited window.confirm,
+  // which blocks the renderer. Dismiss or suppress that dialog and picking
+  // five images produced no toast, no cards and no upload -- a hang.
+  const pending = deferred();
+  const order = [];
+  const studio = { mode: "Reference", assets: [], sessionId: "session" };
+  const api = controller(["uploadFiles"], {
+    studio,
+    uploadMedia: () => { order.push("upload"); return pending.promise; },
+    showToast: () => order.push("toast"),
+    hideToast() {}, audioWasAdded: () => false,
+    renderMedia() {},
+    setMediaBusy: (count) => order.push(`busy:${count}`),
+    canJoinSubject: () => true,
+    applySubject: async () => {},
+  });
+  const operation = api.uploadFiles("Reference", [{}, {}, {}, {}, {}], null);
+  // Before anything is awaited, the studio already says it is working.
+  assert.deepEqual(order, ["busy:5", "toast", "upload"]);
+  pending.resolve({ session_id: "session", assets: [] });
+  await operation;
+  assert.equal(order.at(-1), "busy:0", "and stops saying it when the files land");
+});
+
+test("a failed upload stops the working indicator too", async () => {
+  const studio = { mode: "Reference", assets: [], sessionId: "session" };
+  const busy = [];
+  const api = controller(["uploadFiles"], {
+    studio,
+    uploadMedia: () => Promise.reject(Object.assign(new Error("nope"), { code: "UPLOAD_FAILED" })),
+    showToast() {}, hideToast() {}, audioWasAdded: () => false,
+    renderMedia() {},
+    setMediaBusy: (count) => busy.push(count),
+    canJoinSubject: () => true,
+    applySubject: async () => {},
+  });
+  await api.uploadFiles("Reference", [{}], null);
+  assert.deepEqual(busy, [1, 0], "an indicator that never clears is the same bug again");
+});
+
+test("declining the change warning never opens a file dialog", async () => {
+  // The question moved to the gesture. Asked after the dialog, a "no" returned
+  // in silence -- the user had already picked their files by then.
+  let created = 0;
+  const api = controller(["chooseMedia"], {
+    confirmMediaChange: async () => false,
+    document: { createElement: () => { created += 1; return { addEventListener() {}, click() {} }; } },
+  });
+  await api.chooseMedia("Reference");
+  assert.equal(created, 0);
+});
+
+test("accepting the change warning opens the dialog, with multi-select on", async () => {
+  const input = { addEventListener() {}, click() {}, clicked: 0 };
+  input.click = () => { input.clicked += 1; };
+  const api = controller(["chooseMedia"], {
+    confirmMediaChange: async () => true,
+    document: { createElement: () => input },
+  });
+  await api.chooseMedia("Reference");
+  assert.equal(input.clicked, 1);
+  // ctrl-A / shift-click / ctrl-click are the OS dialog's, given `multiple`.
+  assert.equal(input.multiple, true);
 });
 
 test("Clear all clears the prompts before anything can be awaited", async () => {

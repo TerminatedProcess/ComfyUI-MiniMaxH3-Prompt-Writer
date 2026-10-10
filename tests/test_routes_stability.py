@@ -1201,6 +1201,62 @@ class SubjectRouteTests(unittest.TestCase):
                 routes.STATE.update({"active_request_id": None, "media_mutation_active": False})
 
 
+class SubjectOrderRouteTests(unittest.TestCase):
+    """The grouping arrives as the complete desired state, in box order."""
+
+    SESSION = "11111111-2222-3333-4444-555555555555"
+
+    def setUp(self):
+        routes.STATE.update({"active_request_id": None, "media_mutation_active": False})
+        routes.GENERATION_CACHE.clear()
+        routes.GENERATION_CACHE_ACCESS.clear()
+
+    @staticmethod
+    def payload(response):
+        return json.loads(response.body.decode("utf-8"))
+
+    def call(self, body):
+        return asyncio.run(routes.order_media_subjects(_Request(body=body)))
+
+    def test_a_bad_shape_never_reaches_the_store(self):
+        bad = [
+            {"session_id": self.SESSION},
+            {"session_id": self.SESSION, "groups": "a1"},
+            {"session_id": self.SESSION, "groups": ["a1"]},
+            {"session_id": self.SESSION, "groups": [[]]},
+            {"session_id": self.SESSION, "groups": [[1]]},
+        ]
+        with patch.object(routes.STORE, "order_subjects") as store:
+            for body in bad:
+                response = self.call(body)
+                self.assertEqual(response.status, 400, body)
+                self.assertEqual(self.payload(response)["error"]["code"], "INVALID_REQUEST", body)
+            store.assert_not_called()
+
+    def test_the_order_is_passed_through_untouched(self):
+        with patch.object(routes.STORE, "order_subjects", return_value=[]) as store:
+            response = self.call({"session_id": self.SESSION, "groups": [["b", "c"], ["a"]]})
+        self.assertEqual(response.status, 200)
+        store.assert_called_once_with(self.SESSION, [["b", "c"], ["a"]])
+
+    def test_a_reorder_drops_the_cached_reference_prompt(self):
+        key = routes._cache_key(self.SESSION, "Reference")
+        routes.GENERATION_CACHE[key] = {"prompt": "stale"}
+        with patch.object(routes.STORE, "order_subjects", return_value=[]):
+            self.call({"session_id": self.SESSION, "groups": [["a"]]})
+        self.assertNotIn(key, routes.GENERATION_CACHE)
+
+    def test_a_busy_writer_is_refused(self):
+        routes.STATE["active_request_id"] = "req-1"
+        try:
+            with patch.object(routes.STORE, "order_subjects") as store:
+                response = self.call({"session_id": self.SESSION, "groups": [["a"]]})
+            self.assertEqual(response.status, 409)
+            store.assert_not_called()
+        finally:
+            routes.STATE["active_request_id"] = None
+
+
 if __name__ == "__main__":
     unittest.main()
 

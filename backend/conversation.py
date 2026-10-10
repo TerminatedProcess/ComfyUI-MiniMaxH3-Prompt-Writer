@@ -326,10 +326,12 @@ def quoted_from_brief(quote: Any, brief: str) -> bool:
 
 
 def build_instructions(
-    *, nsfw: bool = True, story: bool, heat: int | None = None, subjects: int = 0
+    *, nsfw: bool = True, story: bool, heat: int | None = None, subjects: int = 0, labelled: bool = False
 ) -> str:
     level = heat_levels.resolve(heat=heat, nsfw=nsfw)
     parts = [BUILD_INSTRUCTIONS, STORY_BUILD_CLAUSE if story else FAITHFUL_BUILD_CLAUSE]
+    if labelled:
+        parts.append(SHORT_LABEL_CLAUSE)
     if subjects:
         parts.append(SUBJECTS_CLAUSE)
     parts.append(heat_levels.clause(level))
@@ -342,9 +344,11 @@ def build_instructions(
 
 
 def turn_instructions(
-    *, nsfw: bool = True, story: bool, heat: int | None = None, subjects: int = 0
+    *, nsfw: bool = True, story: bool, heat: int | None = None, subjects: int = 0, labelled: bool = False
 ) -> str:
     parts = [TURN_INSTRUCTIONS]
+    if labelled:
+        parts.append(SHORT_LABEL_CLAUSE)
     if story:
         parts.append(
             "Story builder is ON, so you may also fill fields the user has not addressed when the change implies "
@@ -372,6 +376,31 @@ def subject_groups(manifest: dict[str, Any]) -> dict[int, list[str]]:
             continue
         groups.setdefault(index, []).append(asset.get("reference") or asset.get("filename") or "")
     return {index: groups[index] for index in sorted(groups)}
+
+
+SHORT_LABEL = re.compile(r"^<(Picture|Video|Audio) ([1-9]\d*)>$")
+SHORT_LABEL_PREFIX = {"Picture": "S", "Video": "V", "Audio": "A"}
+SHORT_LABEL_CLAUSE = (
+    "The reference list gives each file a short label as well -- S1 for <Picture 1>, V1 for <Video 1>. That is "
+    "only what the studio shows on the card: the user may write \"the coat in S2\" in their brief, and you must "
+    "read it as the file it names. Never write a short label into your answer; use the canonical <Picture N>, "
+    "<Video N> and <Audio N> forms, which are the only ones the model being written for accepts."
+)
+
+
+def _short_label(asset: dict[str, Any]) -> str:
+    """What the card calls this reference -- S1, not <Picture 1>.
+
+    Display only, and the SAME number: `_assign_reference_identity` keeps a tag
+    once assigned, so S1 is <Picture 1> for as long as the file is loaded and
+    the two can never drift.
+    """
+    match = SHORT_LABEL.match(str((asset or {}).get("reference") or ""))
+    return f"{SHORT_LABEL_PREFIX[match.group(1)]}{match.group(2)}" if match else ""
+
+
+def _any_labelled(manifest: dict[str, Any]) -> bool:
+    return any(_short_label(asset) for asset in (manifest or {}).get("assets", []))
 
 
 def _stored_subject(asset: dict[str, Any]) -> int | None:
@@ -402,6 +431,7 @@ def _reference_lines(manifest: dict[str, Any]) -> str:
     numbers = {index: position for position, index in enumerate(groups, start=1)}
     lines = [
         f"{asset.get('reference') or asset.get('filename')}: {asset.get('filename')} ({asset.get('type')})"
+        + (f", shown to the user as {_short_label(asset)}" if _short_label(asset) else "")
         + (f" -- group {numbers[_stored_subject(asset)]}" if _stored_subject(asset) in numbers else "")
         for asset in (manifest or {}).get("assets", [])
     ]
@@ -449,7 +479,10 @@ def assemble_build(
 ) -> dict[str, Any]:
     """One request that reads the references and writes the whole document."""
     level = heat_levels.resolve(heat=heat, nsfw=nsfw)
-    instructions = build_instructions(heat=level, story=story, subjects=len(subject_groups(manifest)))
+    instructions = build_instructions(
+        heat=level, story=story,
+        subjects=len(subject_groups(manifest)), labelled=_any_labelled(manifest),
+    )
     references = _reference_lines(manifest)
     existing = ""
     if doc is not None and not generic.is_empty(doc):
@@ -781,7 +814,10 @@ def assemble_turn(
     put the mechanism in their way.
     """
     level = heat_levels.resolve(heat=heat, nsfw=nsfw)
-    instructions = turn_instructions(heat=level, story=story, subjects=len(subject_groups(manifest)))
+    instructions = turn_instructions(
+        heat=level, story=story,
+        subjects=len(subject_groups(manifest)), labelled=_any_labelled(manifest),
+    )
     records = generic.records(doc)
     document = {
         key: {

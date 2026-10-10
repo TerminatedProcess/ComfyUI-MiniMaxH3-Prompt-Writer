@@ -1470,5 +1470,33 @@ async def set_media_subject(request: web.Request) -> web.Response:
     return web.json_response({"assets": assets})
 
 
+@routes.post(f"{ROUTE_PREFIX}/media/subjects/order")
+async def order_media_subjects(request: web.Request) -> web.Response:
+    busy = _generation_busy_error()
+    if busy is not None:
+        return busy
+    body = await _json_body(request)
+    groups = (body or {}).get("groups")
+    # The complete desired grouping, in box order -- not a diff. Shape-checked
+    # here so a malformed list cannot reach the store at all.
+    if body is None or not isinstance(groups, list) or not all(
+        isinstance(group, list) and group and all(isinstance(asset_id, str) for asset_id in group)
+        for group in groups
+    ):
+        return _error("INVALID_REQUEST", "Groups of asset IDs are required.", status=400)
+    busy = _generation_busy_error()
+    if busy is not None:
+        return busy
+    try:
+        session_id = parse_session_id(body.get("session_id"))
+        assets = STORE.order_subjects(session_id, groups)
+    except ValueError:
+        return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
+    except MediaError as error:
+        return _media_error(error)
+    _invalidate_generation_cache(session_id, "Reference")
+    return web.json_response({"assets": assets})
+
+
 register_sequence_routes(routes, sys.modules[__name__])
 register_generic_routes(routes, sys.modules[__name__])

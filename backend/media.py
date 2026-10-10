@@ -573,6 +573,40 @@ class MediaStore:
         self._save(session_id)
         return self.list(session_id)
 
+    def order_subjects(self, session_id: str, groups: list[list[str]]) -> list[dict[str, Any]]:
+        """Rewrite the whole grouping at once, in box order.
+
+        Box order is person order -- the first box is person A, and group 1 in
+        the prompt -- so moving a box has to be one write. Applied as a sequence
+        of single moves, two boxes would briefly share an index and merge into
+        one person.
+
+        Anything not listed is released to the tray, which is what makes this
+        safe to send as the complete desired state rather than a diff.
+        """
+        if len(groups) > MAX_PEOPLE:
+            raise MediaError("INVALID_SUBJECT", f"There can be at most {MAX_PEOPLE} subjects.")
+        assets = self.assets(session_id)
+        listed = [asset_id for group in groups for asset_id in group]
+        if len(set(listed)) != len(listed):
+            raise MediaError("INVALID_SUBJECT", "A picture cannot belong to two subjects.")
+        # Every id resolved and checked before a single write, so a bad one
+        # cannot leave the grouping half-rewritten.
+        resolved = {asset_id: self.get(session_id, asset_id) for asset_id in listed}
+        for asset in resolved.values():
+            if asset["mode"] != "Reference":
+                raise MediaError("INVALID_SUBJECT", "Only reference media can belong to a subject.")
+            if asset["type"] != "image":
+                raise MediaError("INVALID_SUBJECT", "Only a picture can define a subject.")
+        for asset in assets:
+            if asset["mode"] == "Reference":
+                asset["subject"] = None
+        for position, group in enumerate(groups, start=1):
+            for asset_id in group:
+                resolved[asset_id]["subject"] = position
+        self._save(session_id)
+        return self.list(session_id)
+
     def manifest(self, session_id: str, mode: str) -> dict[str, Any]:
         self._load(session_id)
         if session_id in self.sessions:

@@ -166,6 +166,12 @@ export function saveUserPreferences(storage, state) {
     vram_handoff: state.vramHandoff === true,
     theme: state.theme === "light" ? "light" : "dark",
     interface_size: INTERFACE_SIZES.includes(state.interfaceSize) ? state.interfaceSize : "100",
+    // Names you have used for a subject before, most recent first. A
+    // convenience list, not session data: it outlives any one session, which is
+    // the whole point of being able to pick "Liz" again next week.
+    subject_names: Array.isArray(state.subjectNames)
+      ? [...new Set(state.subjectNames.filter((name) => typeof name === "string" && name.trim()).map((name) => name.trim().slice(0, 40)))].slice(0, 20)
+      : [],
   };
   storage?.setItem(USER_PREFERENCES_STORAGE_KEY, JSON.stringify(safe));
 }
@@ -462,6 +468,9 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     mode: preferences?.mode || "Reference",
     lastVideoMode: preferences?.mode && preferences.mode !== "Music3" ? preferences.mode : "Reference",
     mediaFilter: "all",
+    subjectNames: Array.isArray(preferences?.subject_names) ? preferences.subject_names : [],
+    // Which subject box is being dragged to a new position, if any.
+    draggedSubject: null,
     // Subject boxes the user has opened but not filled yet. The filled ones are
     // read off the assets themselves, so only the empty ones live here -- and
     // an empty box is not worth surviving a reload.

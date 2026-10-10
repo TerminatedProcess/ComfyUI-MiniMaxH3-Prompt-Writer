@@ -35,9 +35,21 @@ Duration and aspect ratio become part of the request. The generated text remains
 
 In Reference mode, **Add subject** opens a box below the media tray and asks for pictures. Select every picture of that person at once — it is your system's own file dialog, so Ctrl+A, Shift-click and Ctrl-click all work as usual. Cancel the dialog and the box stays open and empty, ready for pictures you have already uploaded: drag them in from the tray, or drop files straight onto the box. The **+** in a box header adds more to that person later.
 
-Every picture in one box is the same body from a different angle, moment or outfit, and the writer draws on all of them to describe one person. A second box is a second person, and a trait is never moved between them. Boxes are lettered by position, so **Subject A** is the first box that holds a picture. A box you have opened but not filled yet takes no letter until something lands in it.
+Every picture in one box is the same body from a different angle, moment or outfit, and the writer draws on all of them to describe one person. A second box is a second person, and a trait is never moved between them. Boxes are lettered and coloured by position, so **Subject A** is the first box that holds a picture, and its colour runs down the edge of every card inside it. A box you have opened but not filled yet takes no letter until something lands in it.
+
+Type a name into a box's header to call that person something. The field remembers names you have used before, so next time you can pick **Liz** from the list instead of typing it. A name is a handle for talking to the writer -- it lets you say *"make Liz's dress red"* in the conversation -- and it never reaches the finished prompt: at compile time it is resolved back into her description. Naming a box before you Generate seeds the build rather than fighting it.
+
+Drag a box by the grip to its left to reorder people. Box order is person order, so the first box is Subject A in every prompt.
+
+### Changing who is in the shot
+
+Moving pictures between boxes, adding or removing them, reordering, renaming a person -- each of these changes who the prompt is about. Once you have generated something, any of them asks first, then clears the generic prompt, the goals, the conversation and every compiled prompt. Your brief, your media, your subjects and your names are kept.
+
+It only asks once per round: after it clears, there is nothing left to lose, so you can rearrange freely until the next Generate.
 
 A picture left in the tray describes **nobody**. It is evidence for the scene, the style or the wardrobe. Video and audio always stay in the tray: only a picture can define a person.
+
+Cards are labelled **S1**, **S2**, **V1**, **A1** -- short for `<Picture 1>`, `<Video 1>`, `<Audio 1>`. The number is always the same number, and the canonical form is what gets inserted into your brief and written into the finished prompt, because that is the only form MiniMax H3 accepts. Writing "the coat in S2" in your brief works too; the writer resolves it.
 
 Grouping does not renumber anything. `<Picture 3>` stays `<Picture 3>` wherever its card sits, so a tag already written into your brief keeps pointing at the same file. Dragging the last picture out of a box leaves the box open and empty — you are re-sorting, not closing it. Removing a box releases its pictures back to the tray; nothing you uploaded is deleted.
 

@@ -155,3 +155,101 @@ class ColdStoreTests(unittest.TestCase):
                 cold = media.MediaStore()
                 assets = cold.set_subject("session", ["a1"], 1)
                 self.assertEqual(assets[0]["subject"], 1)
+
+
+class SubjectOrderTests(unittest.TestCase):
+    """Box order is person order, so it is rewritten in one pass.
+
+    Applied as a sequence of single moves, two boxes would briefly share an
+    index -- which is not a glitch on the way to the right answer, it is two
+    people merged into one.
+    """
+
+    def store(self, root: Path, *assets) -> media.MediaStore:
+        return SubjectBindingTests().store(root, *assets)
+
+    def asset(self, root: Path, asset_id: str, reference: str, kind: str = "image") -> dict:
+        return SubjectBindingTests.asset(root, asset_id, reference, kind)
+
+    def test_boxes_are_renumbered_to_the_order_given(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(media, "CACHE_ROOT", root):
+                store = self.store(
+                    root,
+                    self.asset(root, "a1", "<Picture 1>"),
+                    self.asset(root, "a2", "<Picture 2>"),
+                    self.asset(root, "a3", "<Picture 3>"),
+                )
+                store.set_subject("session", ["a1"], 1)
+                store.set_subject("session", ["a2", "a3"], 2)
+                assets = store.order_subjects("session", [["a2", "a3"], ["a1"]])
+                self.assertEqual({a["id"]: a["subject"] for a in assets}, {"a1": 2, "a2": 1, "a3": 1})
+
+    def test_a_reorder_never_moves_a_reference_tag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(media, "CACHE_ROOT", root):
+                store = self.store(
+                    root,
+                    self.asset(root, "a1", "<Picture 1>"),
+                    self.asset(root, "a2", "<Picture 2>"),
+                )
+                store.order_subjects("session", [["a2"], ["a1"]])
+                self.assertEqual(
+                    {a["id"]: a["reference"] for a in store.list("session")},
+                    {"a1": "<Picture 1>", "a2": "<Picture 2>"},
+                )
+
+    def test_anything_left_out_is_released_to_the_tray(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(media, "CACHE_ROOT", root):
+                store = self.store(
+                    root,
+                    self.asset(root, "a1", "<Picture 1>"),
+                    self.asset(root, "a2", "<Picture 2>"),
+                )
+                store.set_subject("session", ["a1", "a2"], 1)
+                assets = store.order_subjects("session", [["a1"]])
+                self.assertEqual({a["id"]: a["subject"] for a in assets}, {"a1": 1, "a2": None})
+
+    def test_one_picture_cannot_be_in_two_boxes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(media, "CACHE_ROOT", root):
+                store = self.store(root, self.asset(root, "a1", "<Picture 1>"))
+                with self.assertRaises(media.MediaError) as caught:
+                    store.order_subjects("session", [["a1"], ["a1"]])
+                self.assertEqual(caught.exception.code, "INVALID_SUBJECT")
+
+    def test_a_bad_group_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(media, "CACHE_ROOT", root):
+                store = self.store(
+                    root,
+                    self.asset(root, "a1", "<Picture 1>"),
+                    self.asset(root, "a2", "<Video 1>", kind="video"),
+                )
+                store.set_subject("session", ["a1"], 1)
+                with self.assertRaises(media.MediaError):
+                    store.order_subjects("session", [["a1"], ["a2"]])
+                self.assertEqual({a["id"]: a["subject"] for a in store.list("session")}, {"a1": 1, "a2": None})
+
+    def test_more_boxes_than_people_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(media, "CACHE_ROOT", root):
+                store = self.store(root, self.asset(root, "a1", "<Picture 1>"))
+                with self.assertRaises(media.MediaError):
+                    store.order_subjects("session", [["a1"]] * (MAX_PEOPLE + 1))
+
+    def test_a_cold_store_can_still_reorder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(media, "CACHE_ROOT", root):
+                warm = self.store(root, self.asset(root, "a1", "<Picture 1>"))
+                warm._save("session")
+                cold = media.MediaStore()
+                self.assertEqual(cold.order_subjects("session", [["a1"]])[0]["subject"], 1)

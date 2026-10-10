@@ -290,12 +290,22 @@ def register_generic_routes(routes, services) -> None:
         if busy is not None:
             return busy
         scope = str(body.get("scope") or "all")
-        if scope not in {"all", "prompts"}:
+        if scope not in {"all", "prompts", "downstream"}:
             return services._error("INVALID_REQUEST", "Unknown reset scope.", status=400)
-        if scope == "prompts":
+        if scope in {"prompts", "downstream"}:
             state = session_store.load(session_id)
-            state["inputs"]["brief"] = ""
+            # "downstream" is what a change of subject costs: everything the
+            # process wrote is derived from who is in the shot, so it goes. The
+            # brief does not -- the user typed that, it is upstream of the
+            # document, and losing it to a rename would be a punishment. The
+            # names go with the people they belong to, not with the document
+            # the rename is about to rebuild.
+            keep_names = generic.names(state["generic"]) if scope == "downstream" else {}
+            if scope == "prompts":
+                state["inputs"]["brief"] = ""
             state["generic"] = generic.new_doc()
+            for index, name in keep_names.items():
+                state["generic"] = generic.set_name(state["generic"], index, name)
             state["goals"] = []
             state["conversation"] = []
             state["outputs"] = {}
@@ -468,6 +478,44 @@ def register_generic_routes(routes, services) -> None:
             state["generic"] = generic.set_name(state["generic"], index, str(body.get("name") or ""))
         except generic.GenericError as err:
             return error(err)
+        return _state_response(state, session_id)
+
+    @routes.post(f"{prefix}/generic/names")
+    async def reorder_names(request: web.Request) -> web.Response:
+        """Replace every handle at once, so names follow their subject box.
+
+        A name is stored against a person number, which is a box's position, so
+        moving or releasing a box shifts the names under them. The studio knows
+        where each box went; this writes the whole roll in one request rather
+        than a sequence of renames that could half-apply.
+        """
+        body = await services._json_body(request) or {}
+        try:
+            session_id = _session_id(body)
+        except session_store.SessionStoreError as err:
+            return error(err)
+        raw = body.get("names")
+        if not isinstance(raw, dict):
+            return services._error("INVALID_REQUEST", "A map of person numbers to names is required.", status=400)
+        mapping: dict[int, str] = {}
+        for key, value in raw.items():
+            try:
+                index = int(key)
+            except (TypeError, ValueError):
+                return services._error("INVALID_REQUEST", "A person number is required.", status=400)
+            if not isinstance(value, str):
+                return services._error("INVALID_REQUEST", "A name must be text.", status=400)
+            mapping[index] = value
+        state = session_store.load(session_id)
+        doc = state["generic"]
+        try:
+            for index in generic.names(doc):
+                doc = generic.set_name(doc, index, "")
+            for index, value in mapping.items():
+                doc = generic.set_name(doc, index, value)
+        except generic.GenericError as err:
+            return error(err)
+        state["generic"] = doc
         return _state_response(state, session_id)
 
     @routes.post(f"{prefix}/generic/describe")

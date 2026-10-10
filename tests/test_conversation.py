@@ -485,8 +485,8 @@ class SubjectGroupingTests(unittest.TestCase):
 
     def test_the_reference_list_names_each_picture_s_group(self):
         lines = conversation._reference_lines(_manifest(1, 2, None))
-        self.assertIn("<Picture 1>: pic1.png (image) -- group 1", lines)
-        self.assertIn("<Picture 2>: pic2.png (image) -- group 2", lines)
+        self.assertIn("<Picture 1>: pic1.png (image), shown to the user as S1 -- group 1", lines)
+        self.assertIn("<Picture 2>: pic2.png (image), shown to the user as S2 -- group 2", lines)
         self.assertNotIn("<Picture 3>: pic3.png (image) -- group", lines)
 
     def test_groups_are_numbered_never_lettered(self):
@@ -505,8 +505,8 @@ class SubjectGroupingTests(unittest.TestCase):
         # Middle box closed: the remaining two are groups 1 and 2, with no
         # renumbering write against the stored assets.
         lines = conversation._reference_lines(_manifest(1, 3))
-        self.assertIn("<Picture 1>: pic1.png (image) -- group 1", lines)
-        self.assertIn("<Picture 2>: pic2.png (image) -- group 2", lines)
+        self.assertIn("<Picture 1>: pic1.png (image), shown to the user as S1 -- group 1", lines)
+        self.assertIn("<Picture 2>: pic2.png (image), shown to the user as S2 -- group 2", lines)
 
     def test_no_grouping_leaves_the_contract_byte_identical(self):
         self.assertEqual(
@@ -599,7 +599,7 @@ class CorruptSubjectTests(unittest.TestCase):
     def test_an_unhashable_subject_does_not_raise(self):
         manifest = self.manifest([], {}, 1)
         self.assertEqual(conversation.subject_groups(manifest), {1: ["<Picture 3>"]})
-        self.assertIn("<Picture 3>: p3.png (image) -- group 1", conversation._reference_lines(manifest))
+        self.assertIn("<Picture 3>: p3.png (image), shown to the user as S3 -- group 1", conversation._reference_lines(manifest))
 
     def test_a_subject_outside_the_ceiling_is_ungrouped_on_both_sides(self):
         from backend.generic import MAX_PEOPLE
@@ -607,3 +607,49 @@ class CorruptSubjectTests(unittest.TestCase):
         manifest = self.manifest(0, MAX_PEOPLE + 1, -1)
         self.assertEqual(conversation.subject_groups(manifest), {})
         self.assertNotIn("group", conversation._reference_lines(manifest))
+
+
+class ShortLabelTests(unittest.TestCase):
+    """S1 is what the card says; <Picture 1> is what the model must write.
+
+    The user can type "the coat in S2" into their brief, so the model has to be
+    able to resolve it -- and must never answer with it, because the audit only
+    enforces the canonical tags and would not catch a stray S2.
+    """
+
+    @staticmethod
+    def manifest(*references):
+        return {
+            "assets": [
+                {"reference": ref, "filename": f"f{index}.png", "type": "image", "subject": None}
+                for index, ref in enumerate(references, start=1)
+            ]
+        }
+
+    def test_the_label_keeps_the_tag_s_own_number(self):
+        lines = conversation._reference_lines(self.manifest("<Picture 1>", "<Picture 4>"))
+        self.assertIn("<Picture 1>: f1.png (image), shown to the user as S1", lines)
+        # Not resequenced to S2: the tag is sticky, so the label must be too.
+        self.assertIn("<Picture 4>: f2.png (image), shown to the user as S4", lines)
+
+    def test_video_and_audio_get_their_own_prefix(self):
+        lines = conversation._reference_lines(self.manifest("<Video 1>", "<Audio 2>"))
+        self.assertIn("shown to the user as V1", lines)
+        self.assertIn("shown to the user as A2", lines)
+
+    def test_a_frame_role_has_no_short_label(self):
+        self.assertEqual(conversation._short_label({"reference": "First frame"}), "")
+        self.assertNotIn("shown to the user", conversation._reference_lines(self.manifest("First frame")))
+
+    def test_the_contract_arrives_only_when_something_is_labelled(self):
+        self.assertFalse(conversation._any_labelled(self.manifest("First frame")))
+        self.assertTrue(conversation._any_labelled(self.manifest("<Picture 1>")))
+        self.assertEqual(
+            conversation.build_instructions(story=True),
+            conversation.build_instructions(story=True, labelled=False),
+        )
+        self.assertIn(conversation.SHORT_LABEL_CLAUSE, conversation.build_instructions(story=True, labelled=True))
+        self.assertIn(conversation.SHORT_LABEL_CLAUSE, conversation.turn_instructions(story=True, labelled=True))
+
+    def test_the_contract_forbids_writing_a_short_label(self):
+        self.assertIn("Never write a short label into your answer", conversation.SHORT_LABEL_CLAUSE)

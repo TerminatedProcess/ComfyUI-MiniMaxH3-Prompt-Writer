@@ -1,14 +1,14 @@
 import { createDesktopNotifications } from "./desktop_notifications.js";
 import { promptHighlightMarkup } from "./prompt_highlights.js";
 import { generationButtonMarkup, sequenceNotificationOptions, aspectRatioMarkup, bindAspectRatio, splitMenuMarkup, setSplitMenuOpen, fieldCopyButtonMarkup } from "./writer_controls.js";
-import { mediaVisualDescriptor } from "./media_visual.js";
-import { assetsForSubject, canJoinSubject, nextSubjectIndex, openBoxesAfterMove, subjectIndices, subjectLetter, unassignedAssets } from "./media_subjects.js";
+import { mediaVisualDescriptor, referenceLabel } from "./media_visual.js";
+import { assetsForSubject, canJoinSubject, nextSubjectIndex, openBoxesAfterMove, remappedNames, reorderedGroups, subjectIndices, subjectLetter, subjectTone, unassignedAssets } from "./media_subjects.js";
 import { createSequenceWorkspace } from "./sequence_workspace.js";
 import { createWriterStage } from "./writer_stage.js";
 import { createMediaZoom } from "./media_zoom.js";
 import { generateSequence, cancelSequence } from "./api/sequence.js";
 import { app } from "/scripts/app.js";
-import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getMediaManifest, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, setMediaSubject, unloadModel, uploadMedia } from "./api/h3studio.js";
+import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getMediaManifest, getModels, getOllamaStatus, getStatus, getSystemPrompt, orderMediaSubjects, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, setMediaSubject, unloadModel, uploadMedia } from "./api/h3studio.js";
 import { comfyVramIsAlreadyEmpty, createSessionId, fileCountFromDataTransfer, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replacementTargetForFileDrop, replaceEventListener, vramReleaseReachedTarget } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
@@ -422,6 +422,7 @@ function icon(name, size = 16) {
     video: '<rect x="3" y="5" width="14" height="14" rx="2"/><path d="m17 10 4-2v8l-4-2v-4Z"/>',
     audio: '<path d="M4 12h2m2-4v8m4-12v16m4-13v10m4-7v4"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    drag: '<path d="M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01"/>',
     chevron: '<path d="m9 18 6-6-6-6"/>',
     arrowRight: '<path d="M4 12h15m-6-6 6 6-6 6"/>',
     copy: '<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
@@ -458,8 +459,12 @@ function describeAssetIntoBrief(asset) {
   studio.stage.describe(asset.id);
 }
 
-function renderAsset(asset, index) {
+function renderAsset(asset, index, tone = "") {
   const destructiveDisabled = studio.requestBusy ? "disabled" : "";
+  // What the user calls it. `data-media-tag` stays canonical: <Picture 1> is
+  // the official H3 form, the only one `prompt_audit` accepts, and the only
+  // one that may be inserted into the brief.
+  const label = referenceLabel(asset.reference) || asset.filename;
   const tagDisabled = studio.requestBusy ? "disabled" : "";
   const draggable = studio.requestBusy ? "false" : "true";
   const visual = asset.type === "audio"
@@ -472,17 +477,59 @@ function renderAsset(asset, index) {
   // The double-click is invisible otherwise, and the card has no room to say it.
   const hint = canDescribeAsset(asset) ? ` title="Click to edit · Double-click to write the Creative brief from this picture"` : "";
   return `
-    <div class="h3ps-asset"${hint} tabindex="0" role="group" aria-label="Media inspector" draggable="${draggable}" data-asset-index="${index}" data-asset-id="${asset.id}" data-replace-label="Replace ${escapeHtml(asset.reference || asset.filename)}">
+    <div class="h3ps-asset${tone ? ` h3ps-${tone}` : ""}"${hint} tabindex="0" role="group" aria-label="Media inspector" draggable="${draggable}" data-asset-index="${index}" data-asset-id="${asset.id}" data-replace-label="Replace ${escapeHtml(label)}">
       <span class="h3ps-asset-preview h3ps-${asset.type}">${visual}${overlay}</span>
       <span class="h3ps-asset-copy">
-        <strong>${asset.reference ? `<button type="button" class="h3ps-media-tag is-${asset.type}" data-media-tag="${escapeHtml(asset.reference)}" ${tagDisabled} title="Insert reference at text cursor">${escapeHtml(asset.reference || asset.filename)}</button>` : "Trim required"}</strong>
+        <strong>${asset.reference ? `<button type="button" class="h3ps-media-tag is-${asset.type}" data-media-tag="${escapeHtml(asset.reference)}" ${tagDisabled} title="Insert ${escapeHtml(asset.reference)} at text cursor">${escapeHtml(label)}</button>` : "Trim required"}</strong>
         <small>${escapeHtml(asset.filename)}</small>
       </span>
       ${duration ? `<span class="h3ps-duration">${duration}</span>` : ""}
       ${canDescribeAsset(asset) ? `<button class="h3ps-describe-asset" type="button" data-describe-asset="${asset.id}" title="Write the Creative brief from this picture" aria-label="Write the Creative brief from this picture" ${destructiveDisabled}>${icon("arrowRight", 12)}</button>` : ""}
-      <button class="h3ps-replace-asset" type="button" data-replace-asset="${asset.id}" title="Replace ${escapeHtml(asset.reference || asset.filename)}" aria-label="Replace ${escapeHtml(asset.reference || asset.filename)}" ${destructiveDisabled}>${icon("refresh", 12)}</button>
-      <button class="h3ps-remove-asset" type="button" data-remove-asset="${asset.id}" title="Remove ${escapeHtml(asset.reference || asset.filename)}" aria-label="Remove ${escapeHtml(asset.reference || asset.filename)}" ${destructiveDisabled}>${icon("close", 12)}</button>
+      <button class="h3ps-replace-asset" type="button" data-replace-asset="${asset.id}" title="Replace ${escapeHtml(label)}" aria-label="Replace ${escapeHtml(label)}" ${destructiveDisabled}>${icon("refresh", 12)}</button>
+      <button class="h3ps-remove-asset" type="button" data-remove-asset="${asset.id}" title="Remove ${escapeHtml(label)}" aria-label="Remove ${escapeHtml(label)}" ${destructiveDisabled}>${icon("close", 12)}</button>
     </div>`;
+}
+
+/**
+ * Move every name to wherever its box ended up.
+ *
+ * A name belongs to a person NUMBER, which is a box's position, so releasing or
+ * reordering a box shifts the names under them: drag Bob's box above Liz's and
+ * his pictures would be labelled Liz, and the next build would describe him by
+ * her name. Best effort -- a failure here leaves stale labels, never wrong
+ * pictures, and the gate has already cleared the work that read them.
+ */
+async function carryNames(before) {
+  const after = subjectIndices(studio.assets.filter((asset) => asset.mode === "Reference"));
+  if (before.join() === after.join()) return;
+  const names = studio.stage?.session()?.names || {};
+  if (!Object.keys(names).length) return;
+  try {
+    await studio.stage.reorderNames(remappedNames(before, after, names));
+  } catch (error) {
+    showToast("Names not moved", error.message, error.details);
+  }
+}
+
+/** The document's handle for person N, or "" before one is set. */
+function personName(position) {
+  const name = studio.stage?.session()?.names?.[String(position)];
+  return typeof name === "string" ? name : "";
+}
+
+/**
+ * Remember a name so the next session can pick it instead of typing it.
+ *
+ * Most recent first and capped: the list is a convenience, and one that has
+ * grown to fifty entries is slower to use than the keyboard.
+ */
+function rememberSubjectName(name) {
+  const text = String(name || "").trim();
+  if (!text) return;
+  const previous = studio.subjectNames || [];
+  studio.subjectNames = [text, ...previous.filter((item) => item !== text)].slice(0, 20);
+  saveUserPreferences(localStorage, studio);
+  renderSubjectRoster();
 }
 
 /**
@@ -491,6 +538,16 @@ function renderAsset(asset, index) {
  * Only drawn for the All and Images filters: a box that holds three pictures
  * would look empty under the Video filter while its header claimed otherwise.
  */
+/** Keep the shared name suggestions in step with what has been used. */
+function renderSubjectRoster() {
+  const list = studio.root.querySelector("#h3ps-subject-roster");
+  if (!list) return;
+  list.innerHTML = (studio.subjectNames || [])
+    .filter(Boolean)
+    .map((item) => `<option value="${escapeHtml(item)}"></option>`)
+    .join("");
+}
+
 function renderSubjects(assets, visibleAssets) {
   const indices = subjectIndices(assets, studio.extraSubjects);
   // Letters come from the FILLED boxes only. The writer is told about groups,
@@ -511,20 +568,27 @@ function renderSubjects(assets, visibleAssets) {
     const held = assetsForSubject(assets, index);
     const shown = assetsForSubject(visibleAssets, index);
     const letter = subjectLetter(lettered, index);
-    // Deliberately not the document's name for this person. It only matches
-    // while the last build saw the current grouping, and nothing here can tell
-    // that it did -- swap two boxes' contents and the man's box would read
-    // "Liz" until the next Generate.
+    const tone = subjectTone(lettered, index);
     const title = letter ? `Subject ${letter}` : "New subject";
+    // The name is the document's handle for this person, and the box is where
+    // the person is, so this is where it belongs. A datalist rather than a
+    // popover: the browser already does a combobox, with a keyboard, for free.
+    const name = letter ? personName(lettered.indexOf(index) + 1) : "";
+    const naming = letter
+      ? `<input class="h3ps-subject-name" type="text" list="h3ps-subject-roster" maxlength="40"
+           value="${escapeHtml(name)}" placeholder="${title}" data-name-subject="${lettered.indexOf(index) + 1}"
+           aria-label="Name for ${title}" ${studio.requestBusy ? "disabled" : ""}>`
+      : `<strong>${title}</strong>`;
     return `
-      <section class="h3ps-subject" data-subject-zone="${index}" aria-label="${title}">
+      <section class="h3ps-subject${tone ? ` h3ps-${tone}` : ""}" data-subject-zone="${index}" aria-label="${title}">
         <header>
-          <strong>${title}</strong>
+          ${letter ? `<button class="h3ps-subject-grip" type="button" draggable="${studio.requestBusy ? "false" : "true"}" data-subject-grip="${index}" title="Drag to reorder ${title}" aria-label="Drag to reorder ${title}">${icon("drag", 12)}</button><b>${letter}</b>` : ""}
+          ${naming}
           <small>${held.length ? `${held.length} picture${held.length === 1 ? "" : "s"}` : "Add or drag pictures here"}</small>
           <button type="button" data-add-to-subject="${index}" title="Add pictures to ${title}" aria-label="Add pictures to ${title}" ${studio.requestBusy ? "disabled" : ""}>${icon("plus", 12)}</button>
           <button type="button" data-remove-subject="${index}" title="${letter ? `Release ${title}'s pictures` : "Close this box"}" aria-label="${letter ? `Release ${title}'s pictures` : "Close this box"}" ${studio.requestBusy ? "disabled" : ""}>${icon("close", 12)}</button>
         </header>
-        <div class="h3ps-assets is-reference">${shown.map((asset) => renderAsset(asset, assets.indexOf(asset))).join("")}</div>
+        <div class="h3ps-assets is-reference">${shown.map((asset) => renderAsset(asset, assets.indexOf(asset), tone)).join("")}</div>
       </section>`;
   }).join("");
   return `
@@ -562,6 +626,7 @@ function syncComposerControl(mode = studio.mode) {
 }
 
 async function addComposedPicture({ blob, width, height, mimeType, filename, sources }) {
+  if (!await confirmMediaChange()) return;
   const file = new File([blob], filename, { type: mimeType });
   const result = await uploadMedia(studio.sessionId, "Reference", [file]);
   studio.sessionId = result.session_id;
@@ -645,13 +710,18 @@ function renderMedia(mode) {
     // Only Reference media describes people. In I2VA/FL2VA the pictures are
     // frames of one shot, so there is nothing to group.
     const trayAssets = isReference ? unassignedAssets(visibleAssets) : visibleAssets;
+    const busy = studio.mediaBusy
+      ? `<p class="h3ps-media-busy" role="status" aria-live="polite">${icon("spark", 13)}<span>Adding ${studio.mediaBusy} file${studio.mediaBusy === 1 ? "" : "s"}…</span><small>Decoding and building previews</small></p>`
+      : "";
     media.innerHTML = `
       ${filters}
+      ${busy}
       <div class="h3ps-assets ${isReference ? "is-reference" : ""}" data-subject-zone="">${trayAssets.map((asset) => renderAsset(asset, assets.indexOf(asset))).join("")}
         ${addButton}
       </div>
       ${isReference && (filter === "all" || filter === "image") ? renderSubjects(assets, visibleAssets) : ""}`;
   }
+  renderSubjectRoster();
   notifyMediaCompatibility();
   // A card can vanish from under the pointer -- media cleared, a replace, a
   // re-render -- and the browser never fires pointerout for an element it just
@@ -769,6 +839,7 @@ function bindMediaActions(mode) {
   studio.root.querySelectorAll("[data-remove-asset]").forEach((button) => {
     button.addEventListener("click", async (event) => {
       event.stopPropagation();
+      if (!await confirmMediaChange()) return;
       try {
         const result = await removeMedia(studio.sessionId, button.dataset.removeAsset);
         studio.assets = result.assets;
@@ -798,10 +869,42 @@ function bindMediaActions(mode) {
   studio.root.querySelectorAll("[data-add-to-subject]").forEach((button) => {
     button.addEventListener("click", () => chooseSubjectMedia(Number(button.dataset.addToSubject)));
   });
+  studio.root.querySelectorAll("[data-name-subject]").forEach((input) => {
+    const commit = async () => {
+      const next = input.value.trim().slice(0, 40);
+      const person = Number(input.dataset.nameSubject);
+      if (next === personName(person)) return;
+      // Naming is renaming a person the written work already describes, so it
+      // goes through the same gate as moving their pictures around.
+      if (!await confirmMediaChange()) { renderMedia(studio.mode); return; }
+      try {
+        await studio.stage.renamePerson(person, next);
+        rememberSubjectName(next);
+      } catch (error) {
+        showToast(error.code || "Rename failed", error.message, error.details);
+      }
+      renderMedia(studio.mode);
+    };
+    input.addEventListener("change", commit);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); input.blur(); }
+      if (event.key === "Escape") { event.preventDefault(); input.value = personName(Number(input.dataset.nameSubject)); input.blur(); }
+    });
+  });
+  studio.root.querySelectorAll("[data-subject-grip]").forEach((grip) => {
+    grip.addEventListener("dragstart", (event) => {
+      if (studio.requestBusy) { event.preventDefault(); return; }
+      studio.draggedSubject = Number(grip.dataset.subjectGrip);
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/x-h3ps-subject", grip.dataset.subjectGrip);
+    });
+    grip.addEventListener("dragend", () => { studio.draggedSubject = null; });
+  });
   studio.root.querySelectorAll("[data-remove-subject]").forEach((button) => {
     button.addEventListener("click", async () => {
       const index = Number(button.dataset.removeSubject);
       const held = assetsForSubject(studio.assets.filter((asset) => asset.mode === mode), index);
+      if (held.length && !await confirmMediaChange()) return;
       studio.extraSubjects = (studio.extraSubjects || []).filter((item) => item !== index);
       // Releasing, not deleting: the pictures go back to the tray, where they
       // are still references. Nothing the user uploaded is thrown away.
@@ -816,6 +919,9 @@ function bindMediaActions(mode) {
         return;
       }
       studio.draggedAssetId = card.dataset.assetId;
+      // A grip whose node was re-rendered mid-drag never fires dragend, and a
+      // stale flag would make this card drag reorder PEOPLE instead.
+      studio.draggedSubject = null;
       media.classList.add("is-reordering");
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("application/x-h3ps-asset", card.dataset.assetId);
@@ -859,11 +965,15 @@ function bindMediaActions(mode) {
   replaceEventListener(media, "dragover", "media", (event) => {
     event.preventDefault();
     if (!studio.draggedAssetId) {
-      // Files from the desktop: light the box they would join.
-      if (mode !== "Reference" || ![...(event.dataTransfer.types || [])].includes("Files")) return;
+      // A box being dragged to a new position, or files from the desktop:
+      // either way, light the box they would land on.
+      const dragging = studio.draggedSubject ?? null;
+      const files = [...(event.dataTransfer.types || [])].includes("Files");
+      if (mode !== "Reference" || (dragging === null && !files)) return;
       studio.root.querySelectorAll(".is-subject-target").forEach((item) => item.classList.remove("is-subject-target"));
       const over = event.target.closest("[data-subject-zone]");
-      if (over?.dataset.subjectZone) over.classList.add("is-subject-target");
+      const onto = over?.dataset.subjectZone ? Number(over.dataset.subjectZone) : null;
+      if (onto !== null && onto !== dragging) over.classList.add("is-subject-target");
       return;
     }
     event.dataTransfer.dropEffect = "move";
@@ -880,7 +990,31 @@ function bindMediaActions(mode) {
   });
   replaceEventListener(media, "drop", "media", async (event) => {
     event.preventDefault();
+    // A box dropped on another box is a reorder of people, written in one pass
+    // so two boxes never briefly share an index and merge. Read and cleared
+    // before the busy guard, so a refused drop cannot strand the flag.
+    const draggedSubject = studio.draggedSubject ?? null;
+    studio.draggedSubject = null;
     if (studio.requestBusy) return;
+    if (draggedSubject !== null) {
+      const onto = event.target.closest("[data-subject-zone]");
+      const to = onto?.dataset.subjectZone ? Number(onto.dataset.subjectZone) : null;
+      const from = draggedSubject;
+      const assets = studio.assets.filter((asset) => asset.mode === mode);
+      const groups = to === null ? null : reorderedGroups(assets, subjectIndices(assets, studio.extraSubjects), from, to);
+      if (!groups || !await confirmMediaChange()) return;
+      const before = subjectIndices(assets);
+      try {
+        const result = await orderMediaSubjects(studio.sessionId, groups);
+        studio.assets = result.assets;
+        studio.extraSubjects = [];
+        await carryNames(before);
+        renderMedia(studio.mode);
+      } catch (error) {
+        showToast(error.code || "Reorder failed", error.message, error.details);
+      }
+      return;
+    }
     const sourceId = event.dataTransfer.getData("application/x-h3ps-asset") || studio.draggedAssetId;
     const targetId = event.target.closest("[data-asset-id]")?.dataset.assetId;
     studio.root.querySelectorAll(".is-file-replace-target, .is-subject-target").forEach((item) => item.classList.remove("is-file-replace-target", "is-subject-target"));
@@ -891,6 +1025,9 @@ function bindMediaActions(mode) {
       if (!targetId || sourceId === targetId) return;
       const modeAssets = studio.assets.filter((asset) => asset.mode === mode);
       const reorderedAssets = moveOntoTarget(modeAssets, sourceId, targetId);
+      // Order, not grouping: nobody changes identity, but the order is a build
+      // input, so the written work is still about a different arrangement.
+      if (!await confirmMediaChange({ cast: false })) return;
       try {
         const result = await reorderMedia(studio.sessionId, mode, reorderedAssets.map((asset) => asset.id));
         studio.assets = result.assets;
@@ -908,6 +1045,33 @@ function bindMediaActions(mode) {
     const subject = zone?.dataset.subjectZone ? Number(zone.dataset.subjectZone) : null;
     uploadFiles(mode, files, replacing, { subject });
   });
+}
+
+/**
+ * The one gate in front of every change to who is in the shot.
+ *
+ * Everything the process writes -- the document, the goals, the conversation,
+ * every compiled prompt -- is derived from which pictures describe whom. Change
+ * that and the written work is about a cast that no longer exists, so it goes.
+ *
+ * Self-limiting by construction: after the first confirmed change there is
+ * nothing downstream left, so the rest of the rearranging is silent until the
+ * next Generate. One rule, one question, no special cases to remember.
+ */
+async function confirmMediaChange({ cast = true } = {}) {
+  if (!studio.stage?.hasDownstream?.()) return true;
+  const ok = window.confirm(
+    (cast
+      ? "This changes who is in the shot, so the generic prompt, goals, conversation and compiled prompts "
+      : "This changes the references the prompt was written from, so the generic prompt, goals, conversation "
+        + "and compiled prompts ")
+    + "will be cleared.\n\nYour brief, media and names are kept.\n\nContinue?",
+  );
+  if (!ok) return false;
+  // The clear can fail -- the session reset 409s while a generation runs, and
+  // `withBusy` swallows that into a toast. Taking "yes" as done would let the
+  // change through against the stale cast this gate exists to prevent.
+  return await studio.stage.clearDownstream() !== false;
 }
 
 /**
@@ -930,6 +1094,7 @@ async function dropIntoSubject(sourceId, target) {
     showToast("Pictures only", "Only an image can define a subject. Video and audio stay above as scene references.");
     return true;
   }
+  if (!await confirmMediaChange()) return true;
   // Dragging the last picture out of a box is re-sorting, not closing it. Left
   // to vanish, the box after it would silently become Subject B mid-task.
   await applySubject([sourceId], subject, { keepEmptied: current });
@@ -937,9 +1102,11 @@ async function dropIntoSubject(sourceId, target) {
 }
 
 async function applySubject(assetIds, subject, { keepEmptied = null } = {}) {
+  const before = subjectIndices(studio.assets.filter((asset) => asset.mode === "Reference"));
   try {
     const result = await setMediaSubject(studio.sessionId, assetIds, subject);
     studio.assets = result.assets;
+    await carryNames(before);
     studio.extraSubjects = openBoxesAfterMove(studio.extraSubjects, {
       assets: studio.assets,
       into: subject,
@@ -959,7 +1126,12 @@ function previewAsset(asset) {
   showToast(asset.reference, `${formatDuration(asset.duration)} audio reference loaded.`);
 }
 
-function chooseMedia(mode, replaceAssetId = null) {
+async function chooseMedia(mode, replaceAssetId = null) {
+  // Asked BEFORE the file dialog, never after. A native confirm blocks the
+  // whole page, so asking afterwards froze the studio at the exact moment the
+  // user expected their pictures to appear -- and answering no returned in
+  // silence, which is indistinguishable from a hang.
+  if (!await confirmMediaChange()) return;
   const input = document.createElement("input");
   input.type = "file";
   input.multiple = !replaceAssetId && (mode === "Reference" || mode === "FL2VA");
@@ -976,13 +1148,15 @@ function chooseMedia(mode, replaceAssetId = null) {
  * several, because that is the operating system's dialog and not ours. Only
  * images are offered: a box holds a person.
  */
-function chooseSubjectMedia(subject) {
+async function chooseSubjectMedia(subject) {
+  if (!await confirmMediaChange()) return false;
   const input = document.createElement("input");
   input.type = "file";
   input.multiple = true;
   input.accept = "image/*";
   input.addEventListener("change", () => uploadFiles("Reference", [...input.files], null, { subject }));
   input.click();
+  return true;
 }
 
 async function uploadFiles(mode, files, replaceAssetId = null, { subject = null } = {}) {
@@ -992,6 +1166,10 @@ async function uploadFiles(mode, files, replaceAssetId = null, { subject = null 
     showToast("Reference slot is full", "Use Replace on the existing image.");
     return;
   }
+  // Shown before the first await, not after it. Decoding and resizing several
+  // large pictures takes a visible moment, and a studio that sits there saying
+  // nothing reads as broken rather than busy.
+  setMediaBusy(files.length);
   showToast("Processing media", "Creating previews and the ordered contact sheet…");
   const previousAssets = [...studio.assets];
   try {
@@ -1013,14 +1191,29 @@ async function uploadFiles(mode, files, replaceAssetId = null, { subject = null 
     // mistake it still lands, as a scene reference in the tray.
     const joining = result.assets.filter(canJoinSubject).map((asset) => asset.id);
     if (subject !== null && joining.length) {
+      setMediaBusy(0);
       await applySubject(joining, subject);
       return;
     }
+    setMediaBusy(0);
     renderMedia(studio.mode);
   } catch (error) {
+    setMediaBusy(0);
     renderMedia(studio.mode);
     showToast(error.code || "Upload failed", error.message, error.details);
   }
+}
+
+/**
+ * How many files the studio is currently taking in, or 0 for none.
+ *
+ * Its own state rather than `requestBusy`: that one disables the whole panel
+ * for a model call, and an upload must leave the brief and the controls usable.
+ */
+function setMediaBusy(count) {
+  if (!studio) return;
+  studio.mediaBusy = count > 0 ? count : 0;
+  renderMedia(studio.mode);
 }
 
 /** "2 of 3 corrections" — the backend has always reported this; nothing read it.
@@ -3514,6 +3707,7 @@ function createStudio() {
         </div>
       </div>
 
+      <datalist id="h3ps-subject-roster"></datalist>
       <div class="h3ps-workspace" data-generate-view>
         <section class="h3ps-input-panel">
           <div data-video-inputs>
@@ -3687,13 +3881,19 @@ function createStudio() {
       root,
       icon,
       onAddFrame: async (blob, filename) => {
+        if (!await confirmMediaChange()) return;
         const file = new File([blob], filename, { type: "image/png" });
         const result = await uploadMedia(studio.sessionId, "Reference", [file]);
         studio.assets.push(...result.assets);
         showToast("Picture added", result.assets[0].reference);
         renderMedia(studio.mode);
       },
-      request: (assetId, options) => editMedia(studio.sessionId, assetId, options),
+      // A crop rewrites what the references show, and a trim can promote a
+      // video into a usable one. Both change what the written work describes.
+      request: async (assetId, options) => {
+        if (!await confirmMediaChange()) throw Object.assign(new Error("Cancelled"), { code: "CANCELLED" });
+        return editMedia(studio.sessionId, assetId, options);
+      },
       onSaved: (result) => {
         studio.assets = result.assets;
         showToast("Media applied", "Crop and trim applied. The original source is preserved.");
@@ -4231,6 +4431,8 @@ function createStudio() {
       if (!silent) saveUserPreferences(localStorage, studio);
     },
     inferredModeSummary: () => inferredModeSummary(),
+    confirmMediaChange: () => confirmMediaChange(),
+    rememberSubjectName: (name) => rememberSubjectName(name),
     compile: () => startGenerationPreview(),
     repairAttempts: () => studio.repairAttempts,
     maxRepairAttempts: () => MAX_REPAIR_ATTEMPTS,

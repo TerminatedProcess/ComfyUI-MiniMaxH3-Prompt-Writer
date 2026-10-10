@@ -86,3 +86,31 @@
 .h3ps-add-subject small { color: var(--h3ps-dim); font-size: var(--h3ps-font-caption); }
 .h3ps-subject > header small { margin-left: auto; }
 .h3ps-subject > header [data-add-to-subject] { margin-left: 0; }
+
+/* Six subject colours, by box position. Carried onto every card in the box as
+   well: mid-drag the box chrome is the one thing you cannot see, and "whose
+   picture is this" is exactly the question being asked. */
+.h3ps-subject-1 { --h3ps-subject: var(--h3ps-subject-1); }
+.h3ps-subject-2 { --h3ps-subject: var(--h3ps-subject-2); }
+.h3ps-subject-3 { --h3ps-subject: var(--h3ps-subject-3); }
+.h3ps-subject-4 { --h3ps-subject: var(--h3ps-subject-4); }
+.h3ps-subject-5 { --h3ps-subject: var(--h3ps-subject-5); }
+.h3ps-subject-6 { --h3ps-subject: var(--h3ps-subject-6); }
+.h3ps-subject[class*="h3ps-subject-"] { border-left: 3px solid var(--h3ps-subject); }
+.h3ps-subject > header b { display: grid; place-items: center; width: calc(18px * var(--h3ps-interface-scale)); height: calc(18px * var(--h3ps-interface-scale)); border-radius: 5px; background: var(--h3ps-subject); color: var(--h3ps-subject-ink); font-size: var(--h3ps-font-caption); font-weight: 700; }
+.h3ps-asset[class*="h3ps-subject-"]::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--h3ps-subject); pointer-events: none; }
+.h3ps-subject-grip { display: grid; place-items: center; width: calc(16px * var(--h3ps-interface-scale)); height: calc(20px * var(--h3ps-interface-scale)); border: 0; background: transparent; color: var(--h3ps-dim); cursor: grab; }
+.h3ps-subject-grip:active { cursor: grabbing; }
+.h3ps-subject-grip:hover { color: var(--h3ps-text-hover); }
+.h3ps-subject-name { flex: 0 1 calc(190px * var(--h3ps-interface-scale)); min-width: 0; height: calc(24px * var(--h3ps-interface-scale)); padding: 0 calc(7px * var(--h3ps-interface-scale)); border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--h3ps-text); font-size: var(--h3ps-font-label-sm); font-weight: 600; }
+.h3ps-subject-name::placeholder { color: var(--h3ps-text); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; opacity: .78; }
+.h3ps-subject-name:hover { border-color: var(--h3ps-border-input); }
+.h3ps-subject-name:focus { border-color: var(--h3ps-subject, var(--h3ps-border-selected)); background: var(--h3ps-surface-2); outline: none; }
+.h3ps-subject-name:disabled { opacity: .5; }
+/* "Still working" while files are decoded. Its own row rather than a disabled
+   panel: an upload must leave the brief and the controls usable. */
+.h3ps-media-busy { display: flex; align-items: center; gap: calc(7px * var(--h3ps-interface-scale)); margin: 0 0 calc(8px * var(--h3ps-interface-scale)); padding: calc(7px * var(--h3ps-interface-scale)) calc(9px * var(--h3ps-interface-scale)); border: 1px dashed var(--h3ps-border-input); border-radius: 8px; color: var(--h3ps-text); font-size: var(--h3ps-font-label-sm); }
+.h3ps-media-busy svg { color: var(--h3ps-accent); animation: h3ps-media-pulse 1s ease-in-out infinite; }
+.h3ps-media-busy small { margin-left: auto; color: var(--h3ps-dim); font-size: var(--h3ps-font-caption); }
+@keyframes h3ps-media-pulse { 0%, 100% { opacity: .25; transform: scale(.88); } 50% { opacity: 1; transform: scale(1.12); } }
+@media (prefers-reduced-motion: reduce) { .h3ps-media-busy svg { animation: none; opacity: 1; } }

@@ -41,6 +41,19 @@ def _manifest(session_id: str) -> dict[str, Any]:
         return {"session_id": session_id, "mode": SESSION_MEDIA_MODE, "assets": [], "valid": True}
 
 
+def _person_name(state: dict[str, Any], asset: dict[str, Any]) -> str:
+    """The handle for whoever this picture is of, or "" for nobody.
+
+    A picture in no subject box describes nobody -- it is scene, style or
+    wardrobe evidence -- so it gets no name and the describe keeps writing the
+    scene rather than inventing a person to hang it on.
+    """
+    subject = asset.get("subject")
+    if not isinstance(subject, int):
+        return ""
+    return generic.names(state.get("generic") or {}).get(subject, "")
+
+
 def _flags(state: dict[str, Any], body: dict[str, Any]) -> tuple[int, bool]:
     """(heat level, story). The request wins over the session, as before.
 
@@ -571,6 +584,9 @@ def register_generic_routes(routes, services) -> None:
             # A batch marks its last picture, which is the only one that may say
             # where the motion ends up. A lone describe is always its own last.
             final=bool(body.get("final", True)),
+            # Who she is, if the user has put this picture in a named box. A
+            # picture in no box describes nobody, so it stays nameless.
+            person_name=_person_name(state, asset),
         )
         try:
             text = await _single_call(body, assembled)

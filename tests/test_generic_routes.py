@@ -32,6 +32,7 @@ sys.modules.setdefault(
 )
 
 from backend import generic, goals, routes, session_store  # noqa: E402
+from backend import generic_routes  # noqa: E402
 from backend.generic_routes import register_generic_routes  # noqa: E402
 from backend.models.contract import ModelError  # noqa: E402
 
@@ -746,3 +747,18 @@ class GenericRouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DescribePersonNameTests(unittest.TestCase):
+    """The handle follows the picture's subject box, not its position."""
+
+    def test_the_name_comes_from_the_box_the_picture_is_in(self):
+        state = {"generic": generic.set_name(generic.new_doc(), 2, "Kat")}
+        self.assertEqual(generic_routes._person_name(state, {"subject": 2}), "Kat")
+        # A box with no name typed into it, and a picture in no box at all.
+        self.assertEqual(generic_routes._person_name(state, {"subject": 1}), "")
+        self.assertEqual(generic_routes._person_name(state, {"subject": None}), "")
+        self.assertEqual(generic_routes._person_name(state, {}), "")
+
+    def test_a_session_with_no_document_does_not_explode(self):
+        self.assertEqual(generic_routes._person_name({}, {"subject": 1}), "")

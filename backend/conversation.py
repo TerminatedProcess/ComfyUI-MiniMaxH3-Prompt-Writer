@@ -662,6 +662,21 @@ DESCRIBE_CONTINUE_STORY_MIDDLE_CLAUSE = (
     "Another picture follows this one, so do NOT invent what happens next -- the next picture answers that, and "
     "guessing here writes a beat that contradicts it. Describe this moment and stop."
 )
+# Who the picture is of, when the user has grouped it into a named box. Without
+# this every pass opens "A woman with dark hair...", because each call sees one
+# picture and no reason to believe the reader has met her -- so three beats of
+# one woman read as three strangers. The handle is also what makes a later
+# correction possible ("make Kat's dress red"); it never reaches the compiled
+# prompt, where it is resolved back into her description.
+DESCRIBE_PERSON_CLAUSE = (
+    "The person in this picture is called {name}. The brief already knows who {name} is, so call her {name} "
+    "and write about her as somebody the reader has met: no \"a woman\", no \"a young woman\", and do not "
+    "re-introduce her hair, her age or her build as if for the first time. Only say what this picture adds."
+)
+DESCRIBE_PERSON_FIRST_CLAUSE = (
+    "The person in this picture is called {name}. Introduce her once, by that name, and use it from then on "
+    "rather than \"a woman\"."
+)
 DESCRIBE_CONSOLIDATE_CLAUSE = (
     "The user's brief so far is quoted below. This picture is the SAME scene and the same subject from another "
     "angle, moment or outfit -- not a new scene, not a second subject, and not a later beat. Add only the facts "
@@ -678,6 +693,7 @@ def describe_instructions(
     heat: int | None = None,
     continuing: bool = False,
     final: bool = True,
+    person_name: str = "",
 ) -> str:
     """The contract for reading one picture into the brief.
 
@@ -696,6 +712,9 @@ def describe_instructions(
         parts.append(DESCRIBE_CONTINUE_STORY_FINAL_CLAUSE if final else DESCRIBE_CONTINUE_STORY_MIDDLE_CLAUSE)
     else:
         parts.append(DESCRIBE_CONSOLIDATE_CLAUSE)
+    if person_name:
+        template = DESCRIBE_PERSON_CLAUSE if continuing else DESCRIBE_PERSON_FIRST_CLAUSE
+        parts.append(template.format(name=person_name))
     parts.append(heat_levels.clause(heat_levels.resolve(heat=heat, nsfw=nsfw)))
     return "\n\n".join(parts)
 
@@ -711,6 +730,7 @@ def assemble_describe(
     story: bool,
     brief: str = "",
     final: bool = True,
+    person_name: str = "",
 ) -> dict[str, Any]:
     """Read ONE reference image and write a brief from it.
 
@@ -728,7 +748,7 @@ def assemble_describe(
     level = heat_levels.resolve(heat=heat, nsfw=nsfw)
     established = brief.strip()
     instructions = describe_instructions(
-        heat=level, story=story, continuing=bool(established), final=final,
+        heat=level, story=story, continuing=bool(established), final=final, person_name=person_name,
     )
     label = asset.get("reference") or asset.get("filename")
     # The quoted brief is the one thing the model must not repeat, so it goes in

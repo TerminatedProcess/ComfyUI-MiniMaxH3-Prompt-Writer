@@ -721,3 +721,19 @@ class DescribeBatchTests(unittest.TestCase):
         contract = self.assembled(story=True, brief="She stands by the window.", heat=heat.GRAPHIC)
         self.assertIn(heat.clause(heat.GRAPHIC), contract["system_prompt"]["content"])
         self.assertEqual(contract["input"]["heat"], heat.GRAPHIC)
+
+    def test_a_named_person_is_called_by_name_instead_of_a_woman(self):
+        # Three beats of one woman read as three strangers when every pass
+        # opens "A woman with dark hair": each call sees one picture and no
+        # reason to think the reader has met her.
+        first = conversation.describe_instructions(story=True, person_name="Kat")
+        self.assertIn(conversation.DESCRIBE_PERSON_FIRST_CLAUSE.format(name="Kat"), first)
+        later = conversation.describe_instructions(story=True, continuing=True, person_name="Kat")
+        self.assertIn(conversation.DESCRIBE_PERSON_CLAUSE.format(name="Kat"), later)
+        self.assertIn('no "a woman"', later)
+
+    def test_a_picture_of_nobody_stays_nameless(self):
+        # A picture in no subject box is scene, style or wardrobe evidence, so
+        # the describe keeps writing the scene rather than inventing a person.
+        contract = conversation.describe_instructions(story=True, continuing=True)
+        self.assertNotIn("is called", contract)

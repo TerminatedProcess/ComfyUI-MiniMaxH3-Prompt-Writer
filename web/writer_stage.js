@@ -541,22 +541,37 @@ export function createWriterStage(host) {
     if ("nsfw" in patch || "story" in patch || "variant" in patch) host.invalidateSystemPrompts?.();
   }
 
-  /** Put the remembered writing dials back over a session's defaults.
+  /** Put the remembered dials back over a session's defaults.
    *
    *  A new session and a Reset both start at the backend baseline -- Sensual,
-   *  Story builder on -- which quietly undid a dial the user set once and
-   *  expected to keep, and changed what the next prompt said without saying so.
-   *  Only a dial the user has actually touched is remembered, so a first run
-   *  still gets the backend default rather than a hardcoded copy of it. */
-  async function applyRememberedWritingFlags() {
+   *  Story builder on, 10 seconds, 16:9 -- which quietly undid a dial the user
+   *  set once and expected to keep, and changed what the next prompt said
+   *  without saying so. Only a dial the user has actually touched is
+   *  remembered, so a first run still gets the backend default rather than a
+   *  hardcoded copy of it.
+   *
+   *  Duration and aspect ratio belong here for the same reason the writing
+   *  dials do. They already survived a reload, but Reset wrote the fresh
+   *  session's 10s/16:9 straight back over them AND into preferences, so one
+   *  Reset destroyed the setting permanently rather than just for that run. */
+  async function applyRememberedDials() {
     if (!session) return;
-    const remembered = host.writingFlags?.() || {};
+    const remembered = host.rememberedDials?.() || {};
     const patch = {};
     if (Number.isInteger(remembered.heat) && remembered.heat !== heatLevel(session.inputs)) {
       patch.heat = remembered.heat;
     }
     if (typeof remembered.story === "boolean" && remembered.story !== (session.inputs?.story !== false)) {
       patch.story = remembered.story;
+    }
+    if (
+      Number.isInteger(remembered.duration_seconds)
+      && remembered.duration_seconds !== session.inputs?.duration_seconds
+    ) {
+      patch.duration_seconds = remembered.duration_seconds;
+    }
+    if (remembered.aspect_ratio && remembered.aspect_ratio !== session.inputs?.aspect_ratio) {
+      patch.aspect_ratio = remembered.aspect_ratio;
     }
     if (Object.keys(patch).length) await persistInputs(patch);
   }
@@ -746,12 +761,11 @@ export function createWriterStage(host) {
       applySession(await resetSession({ session_id: host.sessionId(), scope, clear_media: clearMedia }));
       if (scope === "all") {
         host.afterReset();
-        // A full reset means defaults, not just empty text: the fresh session
-        // carries duration and ratio, and the studio holds its own copies that
-        // would otherwise be written straight back. The two writing dials are
-        // the exception -- they are a standing preference, not session content,
-        // so Reset must not move them.
-        await applyRememberedWritingFlags();
+        // A full reset empties the session's content, but not the dials the
+        // user set: Naughty, Story builder, duration and aspect ratio are a
+        // standing preference rather than session content, so they are written
+        // back over the fresh session's baseline before the studio reads it.
+        await applyRememberedDials();
         host.applyInputs?.(session?.inputs);
         autoTargetId = null;
         const inferring = targetsForStage().find((target) => target.infers_mode);
@@ -950,7 +964,7 @@ export function createWriterStage(host) {
       mount();
       registry = await getTargets();
       applySession(await getSession(host.sessionId()));
-      await applyRememberedWritingFlags();
+      await applyRememberedDials();
       host.applyInputs?.(session?.inputs);
       if (session?.target?.mode) {
         host.selectMode(session.target.mode, { silent: true });

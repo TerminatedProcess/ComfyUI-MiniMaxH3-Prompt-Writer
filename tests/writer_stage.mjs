@@ -783,7 +783,7 @@ test("the stage colours come from theme tokens, not hardcoded hex", async () => 
   }
 });
 
-test("the writing dials are a standing preference, not session content", async () => {
+test("the dials the user set are a standing preference, not session content", async () => {
   const window = new Window();
   const previousDocument = globalThis.document;
   globalThis.document = window.document;
@@ -792,37 +792,42 @@ test("the writing dials are a standing preference, not session content", async (
     globalThis.__stageRegistry = REGISTRY;
     globalThis.__stageSession = SESSION;
     // The fixture session carries the backend baseline -- no heat, so Sensual,
-    // and Story builder off. The user set Graphic with Story builder on weeks
-    // ago, and that is what the stage has to put back.
-    const remembered = { heat: 4, story: true };
+    // Story builder off, and no duration or ratio of its own. The user set
+    // Graphic with Story builder on weeks ago, and a 7-second 3:4 clip, and
+    // that is what the stage has to put back.
+    const remembered = { heat: 4, story: true, duration_seconds: 7, aspect_ratio: "3:4" };
+    const expected = {
+      session_id: "11111111-2222-4333-8444-555555555555",
+      heat: 4,
+      story: true,
+      duration_seconds: 7,
+      aspect_ratio: "3:4",
+    };
     const saved = [];
     const stageInstance = stageModule.createWriterStage({
       ...basicHost(root),
-      writingFlags: () => remembered,
+      rememberedDials: () => remembered,
       rememberWritingFlags: (flags) => saved.push(flags),
     });
 
     await stageInstance.start();
-    assert.deepEqual(apiModule.lastCall, [
-      "inputs",
-      { session_id: "11111111-2222-4333-8444-555555555555", heat: 4, story: true },
-    ]);
+    assert.deepEqual(apiModule.lastCall, ["inputs", expected]);
 
     // Reset is the path that bit: the fresh session is back at the baseline, so
     // the dials have to be written over it again rather than silently moving.
+    // Duration and ratio were the worse case of the two -- Reset wrote 10s/16:9
+    // into preferences as well, so the setting was gone for good, not just for
+    // that run.
     apiModule.forgetLastCall();
     await stageInstance.clear({ scope: "all", confirm: false, notify: false });
-    assert.deepEqual(apiModule.lastCall, [
-      "inputs",
-      { session_id: "11111111-2222-4333-8444-555555555555", heat: 4, story: true },
-    ]);
+    assert.deepEqual(apiModule.lastCall, ["inputs", expected]);
 
     // A dial the user has never touched leaves the session's own value alone,
     // so a first run still gets the backend default instead of a copy of it.
     apiModule.forgetLastCall();
     const untouched = stageModule.createWriterStage({
       ...basicHost(mountRoot(window)),
-      writingFlags: () => ({ heat: null, story: null }),
+      rememberedDials: () => ({ heat: null, story: null, duration_seconds: null, aspect_ratio: null }),
       rememberWritingFlags: () => {},
     });
     await untouched.start();

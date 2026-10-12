@@ -4493,7 +4493,16 @@ function createStudio() {
     },
     // Naughty and Story builder are set-and-forget: the session stores them, but
     // the user's last choice outranks a new or just-reset session's defaults.
-    writingFlags: () => ({ heat: studio.heat, story: studio.story }),
+    // Every dial that is a standing preference rather than session content.
+    // Duration and ratio were already saved on change and restored on load;
+    // what they lacked was surviving a Reset, which wrote the fresh session's
+    // 10s/16:9 back over them and into preferences with it.
+    rememberedDials: () => ({
+      heat: studio.heat,
+      story: studio.story,
+      duration_seconds: studio.durationSeconds,
+      aspect_ratio: studio.aspectRatio,
+    }),
     rememberWritingFlags: (flags) => {
       if (Number.isInteger(flags?.heat)) studio.heat = flags.heat;
       if (typeof flags?.story === "boolean") studio.story = flags.story;

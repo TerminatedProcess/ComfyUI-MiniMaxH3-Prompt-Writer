@@ -107,6 +107,16 @@
 .h3ps-subject-name:hover { border-color: var(--h3ps-border-input); }
 .h3ps-subject-name:focus { border-color: var(--h3ps-subject, var(--h3ps-border-selected)); background: var(--h3ps-surface-2); outline: none; }
 .h3ps-subject-name:disabled { opacity: .5; }
+/* Read every picture into the brief. Its own row above the cards, because it
+   acts on the whole set rather than on the card the pointer happens to be over,
+   and the per-card arrows only appear on hover. */
+.h3ps-describe-all { display: flex; align-items: center; gap: calc(8px * var(--h3ps-interface-scale)); margin: 0 0 calc(8px * var(--h3ps-interface-scale)); }
+.h3ps-describe-all button { display: inline-flex; align-items: center; gap: calc(6px * var(--h3ps-interface-scale)); height: calc(26px * var(--h3ps-interface-scale)); padding: 0 calc(10px * var(--h3ps-interface-scale)); border: 1px solid var(--h3ps-border-input); border-radius: 6px; background: var(--h3ps-surface-2); color: var(--h3ps-text); font-size: var(--h3ps-font-label-sm); cursor: pointer; }
+.h3ps-describe-all button:hover { border-color: var(--h3ps-border-selected); background: var(--h3ps-control-hover-soft); color: var(--h3ps-text-hover); }
+.h3ps-describe-all button svg { color: var(--h3ps-accent); }
+.h3ps-describe-all button:disabled { opacity: .5; cursor: not-allowed; }
+.h3ps-describe-all small { color: var(--h3ps-dim); font-size: var(--h3ps-font-caption); }
+
 /* "Still working" while files are decoded. Its own row rather than a disabled
    panel: an upload must leave the brief and the controls usable. */
 .h3ps-media-busy { display: flex; align-items: center; gap: calc(7px * var(--h3ps-interface-scale)); margin: 0 0 calc(8px * var(--h3ps-interface-scale)); padding: calc(7px * var(--h3ps-interface-scale)) calc(9px * var(--h3ps-interface-scale)); border: 1px dashed var(--h3ps-border-input); border-radius: 8px; color: var(--h3ps-text); font-size: var(--h3ps-font-label-sm); }

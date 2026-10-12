@@ -702,6 +702,24 @@ function renderMedia(mode) {
         <button type="button" data-media-filter="video" class="${filter === "video" ? "is-active" : ""}">${icon("video", 13)} Video <b>${counts.video || 0}/3</b></button>
         <button type="button" data-media-filter="audio" class="${filter === "audio" ? "is-active" : ""}">${icon("audio", 13)} Audio <b>${counts.audio || 0}/3</b></button>
       </div>` : "";
+    // The batch arrow. Worth offering only from the second picture on -- with one
+    // attached it is the card's own arrow with a longer label. Story builder
+    // decides what the run means, so it decides what the button is called:
+    // beats of one video, or angles on one scene.
+    const pictureCount = assets.filter((asset) => asset.type === "image").length;
+    const storyOn = studio.stage?.session?.()?.inputs?.story !== false;
+    const describeAllBar = pictureCount > 1 && studio.stage && studio.mode !== "Music3" ? `
+      <div class="h3ps-describe-all">
+        <button type="button" data-describe-all ${studio.requestBusy ? "disabled" : ""}
+          title="Read every picture into the Creative brief, in the order they are shown">
+          ${icon("arrowRight", 13)}<span>${storyOn
+            ? `Write a story from all ${pictureCount} pictures`
+            : `Describe all ${pictureCount} pictures`}</span>
+        </button>
+        <small>${storyOn
+          ? "In order — each picture is the next beat"
+          : "In order — each picture adds only what it alone shows"}</small>
+      </div>` : "";
     const addLabel = !isReference || filter === "image" ? "Add image" : filter === "video" ? "Add video" : filter === "audio" ? "Add audio" : "Add media";
     const canAdd = isReference || assets.length < data.limit;
     const addButton = canAdd
@@ -715,6 +733,7 @@ function renderMedia(mode) {
       : "";
     media.innerHTML = `
       ${filters}
+      ${describeAllBar}
       ${busy}
       <div class="h3ps-assets ${isReference ? "is-reference" : ""}" data-subject-zone="">${trayAssets.map((asset) => renderAsset(asset, assets.indexOf(asset))).join("")}
         ${addButton}
@@ -824,6 +843,14 @@ function bindMediaActions(mode) {
       clearTimeout(studio.assetClickTimer);
       describeAssetIntoBrief(studio.assets.find((item) => item.id === button.dataset.describeAsset));
     });
+  });
+  studio.root.querySelector("[data-describe-all]")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (studio.requestBusy || studio.stage?.busy()) return;
+    // Reading the pictures IS the request, so a text-only model cannot do it at
+    // all -- say so rather than letting the first call fail mid-run.
+    if (!generationModeIsAvailable()) return;
+    studio.stage.describeAll();
   });
   studio.root.querySelectorAll("[data-replace-asset]").forEach((button) => {
     button.addEventListener("click", (event) => {

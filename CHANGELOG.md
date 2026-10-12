@@ -16,6 +16,11 @@
 - Because the boxes say how many people there are, a build that describes a different number now **says so** instead of quietly handing back the wrong document. Grouping two subjects and getting three people back is reported in the conversation, with both numbers.
 - Grouping never moves a `<Picture N>` tag. Dragging a card into a box says who she is; a tag you have already typed into the brief keeps pointing at the same file.
 
+- **Read every picture into the Creative brief at once.** Above the media cards there is now a single button — **Write a story from all N pictures** — which does what clicking each card's arrow in turn would, without the clicking. It works through them in the order they are shown, one pass per picture, and each picture is told what the earlier ones already established. That last part is the point: describing a second picture into a brief that already said something used to restate the whole scene, so four pictures produced four competing accounts of one shot and the brief hit its length cap before the last one landed. Each pass now adds only what its own picture contributes.
+  - **Story builder decides what the run means.** On, the pictures are beats of one video and the brief is chained through them — where the subject moves to, what the camera does, how the light changes. Off, they are angles on one scene and the brief is consolidated instead: each picture adds the detail the others could not see, and nothing is invented.
+  - Only the last picture may say where the motion ends up. For any earlier one the *next* picture is the answer to "what happens next", so guessing there would write a beat the following picture contradicts.
+  - The per-card arrows still work exactly as before, and are still how you pick which pictures contribute and in what order. Videos and audio in the set are skipped — only a picture can be described. The run is one undo, not one per picture.
+
 ### Changed
 
 - **Generate restarts a run you have already corrected.** Press Generate, notice the duration says 5 seconds when you wanted 10, fix it and press again: the run in flight is abandoned and a fresh one starts with the corrected inputs. Nothing from the discarded run is kept. With the inputs untouched the button still simply stops, because it is the only control that can.

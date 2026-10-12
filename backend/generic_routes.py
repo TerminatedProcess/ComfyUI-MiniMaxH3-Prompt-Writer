@@ -556,6 +556,10 @@ def register_generic_routes(routes, services) -> None:
         # Narrowed to the one picture the user pointed at, manifest included, so
         # the model is not also shown -- and does not describe -- the others.
         single = {**manifest, "assets": [asset]}
+        # What the brief says BEFORE this picture: the contract quotes it so the
+        # answer is the delta rather than a fresh account of the whole scene.
+        # Read from the session, not the request, so it cannot disagree with
+        # what the append below is about to be joined onto.
         assembled = conversation.assemble_describe(
             session_id=session_id,
             asset=asset,
@@ -563,6 +567,10 @@ def register_generic_routes(routes, services) -> None:
             media_inputs=_media_inputs([asset]),
             heat=level,
             story=story,
+            brief=str(state["inputs"].get("brief") or ""),
+            # A batch marks its last picture, which is the only one that may say
+            # where the motion ends up. A lone describe is always its own last.
+            final=bool(body.get("final", True)),
         )
         try:
             text = await _single_call(body, assembled)

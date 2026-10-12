@@ -642,10 +642,60 @@ DESCRIBE_FAITHFUL_CLAUSE = (
     "Describe only what is visible. Do not invent a backstory, a name, an action the picture does not show, or "
     "anything outside the frame."
 )
+# What a second, third and fourth picture are FOR. Without these a picture
+# described into a brief that already says something restates the whole scene --
+# subject, wardrobe, setting, light -- so four pictures produced four competing
+# accounts of one shot, and the brief hit its character cap before the last one
+# landed. The fix is to say what is already known and ask only for the delta.
+DESCRIBE_CONTINUE_STORY_CLAUSE = (
+    "The user's brief so far is quoted below, and it already covers the subject, their wardrobe and the setting. "
+    "This picture is the NEXT BEAT of the same video, not a new scene and not a second subject. Write only what "
+    "CHANGES in it: the new position or action, where the subject has moved to, what the camera does, what the "
+    "light does. Do not restate anything the brief already says, do not re-introduce the subject, and never "
+    "contradict a fact already written. Two or three sentences, continuing the brief's own prose."
+)
+DESCRIBE_CONTINUE_STORY_FINAL_CLAUSE = (
+    "This is the LAST picture, so it is where the video ends up. Carry the beat to its resting point and add the "
+    "motion that gets there, but keep it to what these pictures plausibly lead into."
+)
+DESCRIBE_CONTINUE_STORY_MIDDLE_CLAUSE = (
+    "Another picture follows this one, so do NOT invent what happens next -- the next picture answers that, and "
+    "guessing here writes a beat that contradicts it. Describe this moment and stop."
+)
+DESCRIBE_CONSOLIDATE_CLAUSE = (
+    "The user's brief so far is quoted below. This picture is the SAME scene and the same subject from another "
+    "angle, moment or outfit -- not a new scene, not a second subject, and not a later beat. Add only the facts "
+    "the brief does not already state: a detail of the wardrobe, the setting or the body that this angle shows "
+    "and the others could not. If it shows nothing the brief is missing, say only that one extra detail rather "
+    "than restating the scene. Never contradict a fact already written, and invent nothing. One or two sentences."
+)
 
 
-def describe_instructions(*, nsfw: bool = True, story: bool, heat: int | None = None) -> str:
-    parts = [DESCRIBE_INSTRUCTIONS, DESCRIBE_STORY_CLAUSE if story else DESCRIBE_FAITHFUL_CLAUSE]
+def describe_instructions(
+    *,
+    nsfw: bool = True,
+    story: bool,
+    heat: int | None = None,
+    continuing: bool = False,
+    final: bool = True,
+) -> str:
+    """The contract for reading one picture into the brief.
+
+    `continuing` says the brief already has words in it, which changes the job
+    from "write the brief" to "add what this picture alone contributes". Story
+    builder picks what that means: ON chains the pictures into beats of one
+    video, OFF consolidates them into one better-described shot. It is the same
+    flag that already decides whether a single picture may imply motion, so the
+    batch needs no switch of its own.
+    """
+    parts = [DESCRIBE_INSTRUCTIONS]
+    if not continuing:
+        parts.append(DESCRIBE_STORY_CLAUSE if story else DESCRIBE_FAITHFUL_CLAUSE)
+    elif story:
+        parts.append(DESCRIBE_CONTINUE_STORY_CLAUSE)
+        parts.append(DESCRIBE_CONTINUE_STORY_FINAL_CLAUSE if final else DESCRIBE_CONTINUE_STORY_MIDDLE_CLAUSE)
+    else:
+        parts.append(DESCRIBE_CONSOLIDATE_CLAUSE)
     parts.append(heat_levels.clause(heat_levels.resolve(heat=heat, nsfw=nsfw)))
     return "\n\n".join(parts)
 
@@ -659,6 +709,8 @@ def assemble_describe(
     nsfw: bool = True,
     heat: int | None = None,
     story: bool,
+    brief: str = "",
+    final: bool = True,
 ) -> dict[str, Any]:
     """Read ONE reference image and write a brief from it.
 
@@ -666,10 +718,28 @@ def assemble_describe(
     specific picture, and sending the whole media set would describe a scene the
     user did not point at. The manifest and media_inputs are narrowed to that
     asset by the caller.
+
+    `brief` is what the brief already says. A batch run over several pictures is
+    this call repeated, so the only thing that makes the run add up to one
+    document rather than N restatements is each picture being told what the
+    earlier ones already established. `final` marks the last picture of such a
+    run, which is the only one allowed to say where the motion ends up.
     """
     level = heat_levels.resolve(heat=heat, nsfw=nsfw)
-    instructions = describe_instructions(heat=level, story=story)
+    established = brief.strip()
+    instructions = describe_instructions(
+        heat=level, story=story, continuing=bool(established), final=final,
+    )
     label = asset.get("reference") or asset.get("filename")
+    # The quoted brief is the one thing the model must not repeat, so it goes in
+    # the user turn where the picture is, not only in the contract.
+    request = f"The reference image attached to this message is {label}. Write the brief for it."
+    if established:
+        request = (
+            f"The brief so far:\n\n{established}\n\n"
+            f"The reference image attached to this message is {label}. Add what it contributes, "
+            "without repeating anything above."
+        )
     return {
         "schema_version": 1,
         "completion_policy": "single_call",
@@ -680,7 +750,7 @@ def assemble_describe(
             "mode": "T2VA",
             "duration_seconds": None,
             "aspect_ratio": None,
-            "creative_brief": "",
+            "creative_brief": established,
             "media_manifest": manifest,
             "nsfw": heat_levels.permits_adult(level),
             "heat": level,
@@ -691,10 +761,7 @@ def assemble_describe(
         "system_prompt": {"custom": False, "content": instructions},
         "messages": [
             {"role": "system", "name": "brief_from_image_contract", "content": instructions},
-            {
-                "role": "user",
-                "content": f"The reference image attached to this message is {label}. Write the brief for it.",
-            },
+            {"role": "user", "content": request},
         ],
     }
 

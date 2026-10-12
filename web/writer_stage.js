@@ -625,6 +625,32 @@ export function createWriterStage(host) {
     button.hidden = false;
   }
 
+  /** Get what is on screen into the session before a describe appends to it.
+   *
+   *  The brief box debounces its save, so the session may still hold the
+   *  previous wording -- and the description would be appended to a stale
+   *  brief, losing whatever was typed in the last second. */
+  async function flushBrief(wording) {
+    if (wording.trim() === String(session?.inputs?.brief || "").trim()) return;
+    applySession(await saveInputs({ session_id: host.sessionId(), brief: wording }));
+  }
+
+  /** One picture into the brief.
+   *
+   *  The caller owns the busy state so a batch can hold it across the whole
+   *  run: the server's generation lock is released between calls, and a loop
+   *  that let go of the studio's too would let Generate land mid-chain and
+   *  compile a half-written brief. */
+  async function describeOne(asset, { final }) {
+    const box = host.briefElement?.();
+    const payload = await describeAsset({
+      ...host.inferencePayload(), session_id: host.sessionId(), asset_id: asset.id, final,
+    });
+    applySession(payload);
+    if (box && payload.brief) box.value = payload.brief;
+    return payload;
+  }
+
   /** Write the brief from ONE attached image -- the studio's double-click.
    *
    *  Appends when the brief already says something, so describing a second
@@ -637,25 +663,60 @@ export function createWriterStage(host) {
       host.notify("Images only", "Only a picture can be described into the brief.");
       return false;
     }
-    const box = host.briefElement?.();
     const before = host.briefValue();
     let done = false;
     await withBusy(`Reading ${asset.reference || asset.filename}`, async () => {
-      // The brief box debounces its save, so what is on screen may not be in the
-      // session yet -- and the description would be appended to a stale brief.
-      if (before.trim() !== String(session?.inputs?.brief || "").trim()) {
-        applySession(await saveInputs({ session_id: host.sessionId(), brief: before }));
-      }
-      const payload = await describeAsset({
-        ...host.inferencePayload(), session_id: host.sessionId(), asset_id: assetId,
-      });
-      applySession(payload);
-      if (box && payload.brief) box.value = payload.brief;
+      await flushBrief(before);
+      const payload = await describeOne(asset, { final: true });
       offerUndo(payload.previous_brief ?? before, "Undo description");
       done = true;
       host.notify(
         before.trim() ? "Added to the brief" : "Brief written from the image",
         "Read it over and edit anything you disagree with, or undo it.",
+      );
+    });
+    return done;
+  }
+
+  /** Every attached picture into the brief, in order -- the batch arrow.
+   *
+   *  One pass per picture, each told what the earlier ones established, so the
+   *  run adds up to a single document instead of N accounts of the same shot.
+   *  Story builder decides what "in order" means: ON reads them as beats of one
+   *  video and chains them, OFF treats them as angles on one scene and
+   *  consolidates. The order is the order they are attached in, which is the
+   *  order shown on screen -- click order would not survive a reload. */
+  async function describeAll() {
+    const pictures = (host.assets() || []).filter((item) => item.type === "image");
+    if (!pictures.length) {
+      host.notify("No pictures attached", "Add some images first, then describe them all.");
+      return false;
+    }
+    const story = session?.inputs?.story !== false;
+    const before = host.briefValue();
+    let done = false;
+    let read = 0;
+    await withBusy(`Reading ${pictures.length} picture${pictures.length > 1 ? "s" : ""}`, async () => {
+      await flushBrief(before);
+      for (const [index, asset] of pictures.entries()) {
+        host.setStatus(
+          `Reading ${asset.reference || asset.filename} — ${index + 1} of ${pictures.length}`,
+        );
+        // Only the last picture may say where the motion ends up: for any
+        // earlier one the NEXT picture is the answer to "what happens next",
+        // and guessing writes a beat that contradicts it.
+        await describeOne(asset, { final: index === pictures.length - 1 });
+        read += 1;
+      }
+      // One undo for the whole run. Taking back a single link would leave the
+      // wording that followed it describing a beat that is no longer there.
+      offerUndo(before, read > 1 ? `Undo all ${read} descriptions` : "Undo description");
+      done = true;
+      host.notify(
+        story ? `Story written from ${read} pictures` : `Brief written from ${read} pictures`,
+        story
+          ? "Each picture is the next beat. Read it over and edit anything you disagree with."
+          : "Each picture added what the others could not see. Read it over and edit anything you disagree with.",
       );
     });
     return done;
@@ -944,6 +1005,8 @@ export function createWriterStage(host) {
     clear: (options) => reset(options),
     /** Write the brief from one attached image (double-click on its card). */
     describe,
+    /** Write the brief from every attached image, in order. */
+    describeAll,
     busy: () => busy,
     /** Called when media is added or removed, so an automatic target follows it. */
     mediaChanged() {

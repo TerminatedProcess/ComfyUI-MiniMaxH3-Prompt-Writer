@@ -17,9 +17,12 @@ const { buildGeneratePayload, isGenerationModeAvailable, stagePayload } =
 // assertion still passed.
 const apiStub = `data:text/javascript;base64,${Buffer.from(`
   export let lastCall = null;
+  // Every call in order, for the batch flows where what matters is the sequence
+  // rather than the last one -- a per-picture flag is only wrong in the middle.
+  export const calls = [];
   // A module namespace is read-only, so a test that wants a clean slate between
   // two stage actions has to ask the stub to clear it.
-  export const forgetLastCall = () => { lastCall = null; };
+  export const forgetLastCall = () => { lastCall = null; calls.length = 0; };
   export const getTargets = async () => globalThis.__stageRegistry;
   export const getSession = async () => ({ session: globalThis.__stageSession });
   export const buildGeneric = async (body) => { lastCall = ["build", body]; return { session: globalThis.__stageSession }; };
@@ -36,6 +39,7 @@ const apiStub = `data:text/javascript;base64,${Buffer.from(`
   };
   export const describeAsset = async (body) => {
     lastCall = ["describe", body];
+    calls.push(["describe", body]);
     return {
       session: globalThis.__stageSession,
       brief: globalThis.__stageDescribed ?? "a described brief",
@@ -819,6 +823,60 @@ test("the writing dials are a standing preference, not session content", async (
     });
     await untouched.start();
     assert.equal(apiModule.lastCall, null);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
+test("describing every picture chains them in order, and only the last is final", async () => {
+  const window = new Window();
+  const previousDocument = globalThis.document;
+  globalThis.document = window.document;
+  try {
+    const root = mountRoot(window);
+    globalThis.__stageRegistry = REGISTRY;
+    globalThis.__stageSession = { ...SESSION, inputs: { ...SESSION.inputs, brief: "" } };
+    const pictures = [
+      { id: "p1", type: "image", reference: "<Picture 1>", filename: "one.png" },
+      { id: "p2", type: "image", reference: "<Picture 2>", filename: "two.png" },
+      { id: "p3", type: "image", reference: "<Picture 3>", filename: "three.png" },
+      // A clip in the set must not be read as a frame of the story.
+      { id: "v1", type: "video", reference: "<Video 1>", filename: "clip.mp4" },
+    ];
+    const statuses = [];
+    const stageInstance = stageModule.createWriterStage({
+      ...basicHost(root),
+      assets: () => pictures,
+      setStatus: (label) => statuses.push(label),
+    });
+    await stageInstance.start();
+    apiModule.forgetLastCall();
+    statuses.length = 0;
+
+    await stageInstance.describeAll();
+
+    // Three pictures, not four assets: the clip is not a frame of the story.
+    assert.deepEqual(
+      apiModule.calls.map(([, body]) => [body.asset_id, body.final]),
+      [["p1", false], ["p2", false], ["p3", true]],
+    );
+    // Only the last picture is final. For any earlier one the NEXT picture is
+    // the answer to "what happens next", so inventing it there writes a beat
+    // the following picture then contradicts.
+    assert.equal(apiModule.calls.filter(([, body]) => body.final).length, 1);
+    // One busy label for the run, then per-picture progress -- a minutes-long
+    // batch that only said "Reading" would be indistinguishable from a hang.
+    assert.ok(statuses[0].startsWith("Reading 3 pictures"), statuses[0]);
+    assert.deepEqual(statuses.filter((label) => label.startsWith("Reading <Picture")), [
+      "Reading <Picture 1> — 1 of 3",
+      "Reading <Picture 2> — 2 of 3",
+      "Reading <Picture 3> — 3 of 3",
+    ]);
+    // One undo for the whole run: taking back a single link would leave the
+    // wording that followed it describing a beat that is no longer there.
+    const undo = root.querySelector("[data-brief-undo]");
+    assert.equal(undo.hidden, false);
+    assert.equal(undo.textContent, "Undo all 3 descriptions");
   } finally {
     globalThis.document = previousDocument;
   }

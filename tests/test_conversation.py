@@ -653,3 +653,71 @@ class ShortLabelTests(unittest.TestCase):
 
     def test_the_contract_forbids_writing_a_short_label(self):
         self.assertIn("Never write a short label into your answer", conversation.SHORT_LABEL_CLAUSE)
+
+
+class DescribeBatchTests(unittest.TestCase):
+    """Reading several pictures into one brief, one call per picture.
+
+    The whole value of the batch is that each picture is told what the earlier
+    ones established. Without that every call restates the subject, the
+    wardrobe and the setting, so four pictures produce four competing accounts
+    of one shot and the brief hits its character cap before the last lands.
+    """
+
+    ASSET = {"id": "a1", "reference": "<Picture 2>", "filename": "beat2.png", "type": "image"}
+
+    def assembled(self, **kwargs):
+        return conversation.assemble_describe(
+            session_id="s1",
+            asset=self.ASSET,
+            manifest={"assets": [self.ASSET]},
+            media_inputs=[],
+            **kwargs,
+        )
+
+    def test_the_first_picture_writes_the_brief_as_it_always_did(self):
+        story = self.assembled(story=True)
+        self.assertIn(conversation.DESCRIBE_STORY_CLAUSE, story["system_prompt"]["content"])
+        self.assertNotIn(conversation.DESCRIBE_CONTINUE_STORY_CLAUSE, story["system_prompt"]["content"])
+        faithful = self.assembled(story=False)
+        self.assertIn(conversation.DESCRIBE_FAITHFUL_CLAUSE, faithful["system_prompt"]["content"])
+        self.assertEqual(story["input"]["creative_brief"], "")
+
+    def test_a_continuing_picture_is_asked_for_the_delta_not_the_scene(self):
+        payload = self.assembled(story=True, brief="Liz stands in a red dress by the window.", final=False)
+        contract = payload["system_prompt"]["content"]
+        self.assertIn(conversation.DESCRIBE_CONTINUE_STORY_CLAUSE, contract)
+        # The brief is quoted where the picture is, so the words it must not
+        # repeat are in front of the model rather than only described to it.
+        self.assertIn("Liz stands in a red dress by the window.", payload["messages"][-1]["content"])
+        self.assertEqual(payload["input"]["creative_brief"], "Liz stands in a red dress by the window.")
+
+    def test_only_the_last_picture_may_say_where_the_motion_ends_up(self):
+        middle = self.assembled(story=True, brief="She stands by the window.", final=False)["system_prompt"]["content"]
+        last = self.assembled(story=True, brief="She stands by the window.", final=True)["system_prompt"]["content"]
+        # An earlier picture that invents what happens next writes a beat the
+        # NEXT picture then contradicts.
+        self.assertIn(conversation.DESCRIBE_CONTINUE_STORY_MIDDLE_CLAUSE, middle)
+        self.assertNotIn(conversation.DESCRIBE_CONTINUE_STORY_FINAL_CLAUSE, middle)
+        self.assertIn(conversation.DESCRIBE_CONTINUE_STORY_FINAL_CLAUSE, last)
+        self.assertNotIn(conversation.DESCRIBE_CONTINUE_STORY_MIDDLE_CLAUSE, last)
+
+    def test_story_builder_off_consolidates_instead_of_chaining(self):
+        contract = self.assembled(story=False, brief="She stands by the window.")["system_prompt"]["content"]
+        self.assertIn(conversation.DESCRIBE_CONSOLIDATE_CLAUSE, contract)
+        self.assertNotIn(conversation.DESCRIBE_CONTINUE_STORY_CLAUSE, contract)
+        # Consolidation never invents a later beat, so the end-of-run clause has
+        # no business being there whether or not this is the last picture.
+        self.assertNotIn(conversation.DESCRIBE_CONTINUE_STORY_FINAL_CLAUSE, contract)
+
+    def test_a_blank_brief_is_not_a_continuation(self):
+        # Whitespace in the box is not something to avoid restating, and quoting
+        # it would ask the model to continue from nothing.
+        contract = self.assembled(story=True, brief="   \n  ")["system_prompt"]["content"]
+        self.assertIn(conversation.DESCRIBE_STORY_CLAUSE, contract)
+        self.assertNotIn(conversation.DESCRIBE_CONTINUE_STORY_CLAUSE, contract)
+
+    def test_the_heat_clause_still_rides_along(self):
+        contract = self.assembled(story=True, brief="She stands by the window.", heat=heat.GRAPHIC)
+        self.assertIn(heat.clause(heat.GRAPHIC), contract["system_prompt"]["content"])
+        self.assertEqual(contract["input"]["heat"], heat.GRAPHIC)

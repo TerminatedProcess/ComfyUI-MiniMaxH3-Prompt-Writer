@@ -17,6 +17,7 @@
  * workspace all keep working untouched.
  */
 import { inferH3Mode } from "./mode_inference.js";
+import { setSplitMenuOpen, splitMenuMarkup } from "./writer_controls.js";
 import {
   buildGeneric,
   changeGoal,
@@ -119,8 +120,23 @@ export function createWriterStage(host) {
         <button class="h3ps-primary-button h3ps-stage-build" type="button" data-stage-build>
           ${icon("spark", 15)}<span data-stage-build-label>Generate generic prompt</span>
         </button>
-        <button class="h3ps-text-button h3ps-stage-reset" type="button" data-stage-reset
-                title="Clear the generic prompt, goals, conversation and compiled prompts">Reset</button>
+        <div class="h3ps-clear-control" data-stage-reset-control>
+          ${splitMenuMarkup(icon, {
+            label: "Reset",
+            primary: 'data-stage-reset title="Reset the session: brief, media and every prompt"',
+            toggle: "data-stage-reset-toggle",
+            menu: "data-stage-reset-menu",
+            ariaLabel: "Reset options",
+            // Narrowest first, destructive last with the warning class -- the
+            // same order as the media Actions menu. A menu whose first entry
+            // wipes the session is one slip from losing the media.
+            contents: `
+              <button type="button" data-stage-reset-scope="downstream"><strong>Clear the generic prompt</strong><small>Keeps media and brief</small></button>
+              <button type="button" data-stage-reset-scope="prompts"><strong>Clear prompts</strong><small>Keeps media</small></button>
+              <button class="is-destructive" type="button" data-stage-reset-scope="all"><strong>Reset everything</strong><small>Brief, media and prompts</small></button>
+            `,
+          })}
+        </div>
       </div>
       <section class="h3ps-stage-chat" aria-label="Conversation">
         <header>
@@ -500,7 +516,7 @@ export function createWriterStage(host) {
 
   function syncBusy() {
     const disabled = busy || host.requestBusy();
-    root.querySelectorAll("[data-stage-build], [data-stage-send], [data-stage-compile], [data-stage-reset], [data-brief-expand], [data-brief-undo]")
+    root.querySelectorAll("[data-stage-build], [data-stage-send], [data-stage-compile], [data-stage-reset], [data-stage-reset-toggle], [data-stage-reset-scope], [data-brief-expand], [data-brief-undo]")
       .forEach((button) => { button.disabled = disabled; });
   }
 
@@ -748,8 +764,18 @@ export function createWriterStage(host) {
     query("[data-brief-undo]").hidden = true;
   }
 
+  function setStageResetMenuOpen(open) {
+    setSplitMenuOpen(query("[data-stage-reset-control]"), open);
+  }
+
+  const RESET_NOTICES = {
+    all: ["Session reset", "The generic prompt, goals, conversation, compiled prompts and media were cleared."],
+    prompts: ["Prompts cleared", "The brief, the generic prompt, the goals, the conversation and every compiled prompt were cleared. Your media was kept."],
+    downstream: ["Generic prompt cleared", "The generic prompt, goals, conversation and compiled prompts were cleared. Your brief, media and names were kept."],
+  };
+
   async function reset({ scope = "all", clearMedia = true, confirm = true, notify = true } = {}) {
-    if (confirm && !host.confirmReset()) return false;
+    if (confirm && !host.confirmReset(scope)) return false;
     let done = false;
     await withBusy(scope === "all" ? "Resetting" : "Clearing prompts", async () => {
       // Emptied before the session lands, so `onSessionChanged` sees an empty box
@@ -774,15 +800,18 @@ export function createWriterStage(host) {
           applyAuto();
         }
         render();
+      } else {
+        // Every scope clears the compiled prompts server-side, but
+        // `renderOutputFor` only ever REPLACES the editor -- with no stored
+        // output it takes the empty branch and leaves whatever was on screen.
+        // So the pane kept showing a prompt compiled from a document that no
+        // longer exists, which also bit the cast-change path that has used this
+        // scope all along.
+        host.clearCompiledOutput?.();
       }
       done = true;
       if (!notify) return;
-      host.notify(
-        scope === "prompts" ? "Prompts cleared" : "Session reset",
-        scope === "prompts"
-          ? "The brief, the generic prompt, the goals, the conversation and every compiled prompt were cleared. Your media was kept."
-          : "The generic prompt, goals, conversation and compiled prompts were cleared.",
-      );
+      host.notify(...(RESET_NOTICES[scope] || RESET_NOTICES.all));
     });
     return done;
   }
@@ -870,7 +899,29 @@ export function createWriterStage(host) {
     query("[data-brief-expand]")?.addEventListener("click", expand);
     query("[data-brief-undo]")?.addEventListener("click", undoExpand);
     query("[data-stage-send]").addEventListener("click", send);
+    // The primary click keeps doing what Reset has always done, so nobody's
+    // muscle memory changes; the caret is where the narrower scopes live.
     query("[data-stage-reset]").addEventListener("click", () => reset());
+    query("[data-stage-reset-toggle]").addEventListener("click", () => {
+      setStageResetMenuOpen(query("[data-stage-reset-menu]").hidden);
+    });
+    // Dismiss on a click anywhere else. Owned here rather than in the studio's
+    // own outside-click handler, because that one keys off [data-clear-control]
+    // and a second element carrying it would shadow the media menu.
+    root.addEventListener("click", (event) => {
+      if (!event.target.closest("[data-stage-reset-control]")) setStageResetMenuOpen(false);
+    });
+    root.querySelectorAll("[data-stage-reset-scope]").forEach((button) => {
+      button.addEventListener("click", () => {
+        setStageResetMenuOpen(false);
+        const scope = button.getAttribute("data-stage-reset-scope");
+        // "prompts" goes through the host: it also empties the brief box and
+        // the editor, which the studio owns, and routing it here instead would
+        // clear the session while leaving both on screen.
+        if (scope === "prompts") host.clearPrompts?.();
+        else reset({ scope, clearMedia: scope === "all" });
+      });
+    });
     query("[data-stage-compile]").addEventListener("click", () => host.compile());
     query("[data-stage-message]").addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); send(); }

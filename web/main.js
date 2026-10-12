@@ -4512,9 +4512,30 @@ function createStudio() {
     clearStatus: () => setGenerationState("idle"),
     notify: (title, message) => showToast(title, message, null, null, { dismissOnWorkspaceClick: true }),
     notifyError: (error) => showToast("Writer", error.message || String(error), error.details || null),
-    confirmReset: () => window.confirm(
-      "Reset this session? The generic prompt, goals, conversation, compiled prompts and attached media are cleared.",
+    // Each scope names what it keeps, because that is the only part the user
+    // is deciding between -- three confirms that all said "this is cleared"
+    // would make the narrower ones look exactly as expensive as the widest.
+    confirmReset: (scope = "all") => window.confirm(
+      scope === "downstream"
+        ? "Clear the generic prompt? The goals, conversation and compiled prompts go with it.\n\nYour brief, media and names are kept."
+        : scope === "prompts"
+          ? "Clear the prompts? The brief, generic prompt, goals, conversation and compiled prompts are cleared.\n\nYour media is kept."
+          : "Reset this session? The generic prompt, goals, conversation, compiled prompts and attached media are cleared.",
     ),
+    /** Blank the compiled prompt pane without touching the brief or the media. */
+    clearCompiledOutput: () => {
+      const output = studio.root.querySelector("[data-output]");
+      output.value = "";
+      studio.lastModelPrompt = null;
+      studio.lastModelMeta = null;
+      studio.refineRestore = null;
+      studio.root.querySelector("[data-refine-restore]").hidden = true;
+      studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = promptLengthMeta("");
+      renderPromptHighlights();
+      syncModifiedState();
+      saveCurrentModeDraft();
+    },
+    clearPrompts: () => clearCurrentPrompts(),
     afterReset: () => {
       studio.assets = [];
       // The media is gone, so an empty box is waiting for nothing. Left behind
@@ -4811,6 +4832,11 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     if (!studio.root.querySelector("[data-clear-menu]").hidden) {
       setClearMenuOpen(false);
+      return;
+    }
+    const stageResetMenu = studio.root.querySelector("[data-stage-reset-menu]");
+    if (stageResetMenu && !stageResetMenu.hidden) {
+      setSplitMenuOpen(studio.root.querySelector("[data-stage-reset-control]"), false);
       return;
     }
     const guideMenu = studio.root.querySelector("[data-guide-menu]");

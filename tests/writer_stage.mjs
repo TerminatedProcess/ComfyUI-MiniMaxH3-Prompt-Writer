@@ -51,10 +51,16 @@ const apiStub = `data:text/javascript;base64,${Buffer.from(`
 const inferenceStub = `data:text/javascript;base64,${Buffer.from(
   await read("../web/mode_inference.js"),
 ).toString("base64")}`;
+// Inlined for real rather than stubbed: the split menu the stage's Reset uses
+// is the studio's own primitive, and a fake one would let the two drift.
+const controlsStub = `data:text/javascript;base64,${Buffer.from(
+  await read("../web/writer_controls.js"),
+).toString("base64")}`;
 const stageModule = await import(`data:text/javascript;base64,${Buffer.from(
   stage
     .replace('"./api/h3studio.js"', JSON.stringify(apiStub))
-    .replace('"./mode_inference.js"', JSON.stringify(inferenceStub)),
+    .replace('"./mode_inference.js"', JSON.stringify(inferenceStub))
+    .replace('"./writer_controls.js"', JSON.stringify(controlsStub)),
 ).toString("base64")}`);
 // The same specifier string the stage imported, so this is the one module
 // instance -- `lastCall` is what the stage actually sent.
@@ -886,6 +892,67 @@ test("describing every picture chains them in order, and only the last is final"
     const undo = root.querySelector("[data-brief-undo]");
     assert.equal(undo.hidden, false);
     assert.equal(undo.textContent, "Undo all 3 descriptions");
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
+test("Reset offers the narrower scopes without changing what its click does", async () => {
+  const window = new Window();
+  const previousDocument = globalThis.document;
+  globalThis.document = window.document;
+  try {
+    const root = mountRoot(window);
+    globalThis.__stageRegistry = REGISTRY;
+    globalThis.__stageSession = SESSION;
+    const cleared = [];
+    const confirmed = [];
+    const stageInstance = stageModule.createWriterStage({
+      ...basicHost(root),
+      confirmReset: (scope) => { confirmed.push(scope); return true; },
+      clearCompiledOutput: () => cleared.push("output"),
+      clearPrompts: () => cleared.push("prompts-via-host"),
+    });
+    await stageInstance.start();
+
+    // All three scopes are reachable, and the destructive one is marked and last
+    // -- a menu whose first entry wipes the media is one slip from losing it.
+    const scopes = Array.from(root.querySelectorAll("[data-stage-reset-scope]"))
+      .map((button) => button.getAttribute("data-stage-reset-scope"));
+    assert.deepEqual(scopes, ["downstream", "prompts", "all"]);
+    assert.ok(root.querySelector('[data-stage-reset-scope="all"]').classList.contains("is-destructive"));
+
+    // The caret opens it; the primary button is untouched.
+    const menu = root.querySelector("[data-stage-reset-menu]");
+    assert.equal(menu.hidden, true);
+    root.querySelector("[data-stage-reset-toggle]").click();
+    assert.equal(menu.hidden, false);
+
+    // "Clear the generic prompt" keeps the media, and the brief box is never
+    // emptied -- that is the whole difference from the other two.
+    apiModule.forgetLastCall();
+    const brief = root.querySelector("[data-video-brief]");
+    brief.value = "a courier at dusk";
+    root.querySelector('[data-stage-reset-scope="downstream"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(menu.hidden, true, "choosing a scope closes the menu");
+    assert.deepEqual(confirmed, ["downstream"], "the confirm is told which scope it is for");
+    assert.deepEqual(apiModule.lastCall, [
+      "reset",
+      { session_id: "11111111-2222-4333-8444-555555555555", scope: "downstream", clear_media: false },
+    ]);
+    assert.equal(brief.value, "a courier at dusk", "the brief the user typed survives");
+    // The session's compiled prompts are gone, so the pane must not keep showing
+    // one: renderOutputFor only ever REPLACES, so nothing else would clear it.
+    assert.ok(cleared.includes("output"));
+
+    // "Clear prompts" goes through the studio, which owns the brief box and the
+    // editor; running it here would clear the session and leave both on screen.
+    apiModule.forgetLastCall();
+    root.querySelector("[data-stage-reset-toggle]").click();
+    root.querySelector('[data-stage-reset-scope="prompts"]').click();
+    assert.deepEqual(cleared.filter((entry) => entry === "prompts-via-host"), ["prompts-via-host"]);
+    assert.equal(apiModule.lastCall, null, "the stage does not reset the session itself");
   } finally {
     globalThis.document = previousDocument;
   }

@@ -12,7 +12,7 @@ from typing import Any
 
 from .. import heat as heat_levels
 
-from ..prompt_audit import audit_prompt, camera_structure_requested
+from ..prompt_audit import REFERENCE_SECTIONS, audit_prompt, camera_structure_requested
 from ..prompt_repair import (
     audit_failures,
     dialogue_lines,
@@ -222,6 +222,42 @@ def accept_repair(
     return True, repaired_audit, None
 
 
+# Where a restored fact belongs in the official six-section layout. Putting one
+# in the wrong section is not a format failure -- the audit counts sections and
+# words, not meaning -- but H3 reads them as different things, and a wardrobe
+# note filed under overall_soundscape is noise in the one section that is
+# supposed to be about sound.
+FACT_SECTIONS = {
+    "subject": "subject_definitions",
+    "appearance": "subject_definitions",
+    "wardrobe": "subject_definitions",
+    "soundscape": "overall_soundscape",
+    "music": "non_diegetic_music",
+}
+DEFAULT_FACT_SECTION = "detailed_description"
+
+
+def integrate_facts(assembled: dict[str, Any], prompt: str, additions: list[tuple[str, str]]) -> str:
+    """Splice restored facts into the section each one belongs to.
+
+    Only Reference mode emits the six sections; the other H3 modes return one
+    block, and `insert_into_section` falls back to appending when the header it
+    is looking for is not there. Either way nothing already in the draft is
+    rewritten, which is what makes this pass unable to lose a fact.
+    """
+    from .. import fact_insertion, generic
+
+    for key, sentence in additions:
+        field = (generic.split_key(key) or (key, 1))[0]
+        prompt = fact_insertion.insert_into_section(
+            prompt,
+            sentence,
+            FACT_SECTIONS.get(field, DEFAULT_FACT_SECTION),
+            REFERENCE_SECTIONS,
+        )
+    return prompt
+
+
 def _video_modes() -> tuple[Mode, ...]:
     return (
         Mode("T2VA", "From a description", "from your description alone", ("base",), {}, "standard"),
@@ -263,6 +299,7 @@ H3 = Target(
     audit=audit,
     repair_plan=repair_plan,
     accept_repair=accept_repair,
+    integrate_facts=integrate_facts,
     infer_mode=infer_mode,
     supports_sequence=True,
 )

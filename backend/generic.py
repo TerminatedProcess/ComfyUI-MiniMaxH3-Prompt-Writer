@@ -649,8 +649,8 @@ def render_constraints(doc: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def lock_violations(doc: dict[str, Any], prose: str) -> tuple[str, ...]:
-    """Locked fields whose distinctive words are missing from a compiled prompt.
+def covers(value: str, prose: str) -> bool:
+    """Whether `prose` still carries the distinctive words of one field value.
 
     Token-based on purpose: cheap enough to run after every compile, and drift
     shows up as vocabulary simply going missing. Names are all-or-nothing --
@@ -662,21 +662,32 @@ def lock_violations(doc: dict[str, Any], prose: str) -> tuple[str, ...]:
     arm extended toward the camera, tilting her head slightly" restated as "she
     extends her right arm toward the camera to take a selfie" scored 0.58
     against the 0.6 bar on verb endings alone. Names are still matched exactly.
+
+    One field at a time, and public, so that a sentence written to RESTORE a
+    dropped fact can be held to the same bar it is trying to clear before it is
+    spliced in (see `fact_insertion`). A restoration judged by a looser rule
+    than the audit is a restoration that fails the next audit.
     """
-    prose_tokens = distinctive_tokens(prose or "")
-    prose_stems = distinctive_stems(prose or "")
+    wanted = distinctive_stems(value)
+    if not wanted:
+        return True
+    found_names, dropped_names = name_check(value, prose or "")
+    if dropped_names:
+        return False
+    threshold = 0.35 if found_names else 0.6
+    return len(wanted & distinctive_stems(prose or "")) / len(wanted) >= threshold
+
+
+def lock_violations(doc: dict[str, Any], prose: str) -> tuple[str, ...]:
+    """Locked fields whose distinctive words are missing from a compiled prompt."""
     missing: list[str] = []
     for key in locked_fields(doc):
         value = record(doc, key)["value"]
-        wanted = distinctive_stems(value)
-        if not wanted:
+        # An empty or stopword-only value cannot go missing; `covers` says True
+        # for it either way, and skipping keeps that explicit.
+        if not distinctive_stems(value):
             continue
-        names, dropped_names = name_check(value, prose or "")
-        if dropped_names:
-            missing.append(key)
-            continue
-        threshold = 0.35 if names else 0.6
-        if len(wanted & prose_stems) / len(wanted) < threshold:
+        if not covers(value, prose or ""):
             missing.append(key)
     return tuple(missing)
 

@@ -569,7 +569,11 @@ test("a repair that worked is recorded, not announced", () => {
   // It used to arrive as its own toast, at the volume of a real problem, about
   // work that had already succeeded.
   assert.match(main, /format_repair_applied \? " · auto-corrected" : ""/);
-  assert.match(main, /meta\.title = repairAppliedDetail\(result\)/);
+  assert.match(main, /result\.format_repair_applied \? repairAppliedDetail\(result\) : null/);
+  // A fact written back into the draft is the same class of event: it already
+  // succeeded, so it is recorded beside the measurements and hover says which.
+  assert.match(main, /\$\{restored\} fact\$\{restored === 1 \? "" : "s"\} written back/);
+  assert.match(main, /factInsertionDetail\(result\)/);
   // The rejected repair is the one with a decision in it, so it keeps its toast
   // and now offers the action.
   assert.match(main, /label: "Generate again"/);

@@ -74,6 +74,12 @@ class Target:
     accept_repair: Callable[..., tuple[bool, dict[str, Any], str | None]]
     variants: tuple[str, ...] = ()
     default_variant: str | None = None
+    # Splice restored facts into a draft of this target's shape, without
+    # re-emitting it (see `backend/fact_insertion.py`). None means the target
+    # opts out and a dropped fact stays with the rewrite loop -- which is the
+    # honest answer for a tag prompt and a music caption, where "one sentence
+    # in the draft's voice" is not a thing that exists.
+    integrate_facts: Callable[[dict[str, Any], str, list[tuple[str, str]]], str] | None = None
     # The closing instruction appended to the user message. It restates the
     # contract where the model is most likely to still be paying attention.
     final_contract: Callable[..., str] | None = None
@@ -171,6 +177,20 @@ def _auditable(key: str, assembled: dict[str, Any]) -> bool:
     if field == "exclusions":
         return False
     return True
+
+
+def append_facts(assembled: dict[str, Any], prompt: str, additions: list[tuple[str, str]]) -> str:
+    """Restore dropped facts in a single-block prose prompt: on the end.
+
+    Prose has nowhere better to put them. Appending is deliberately dumb -- the
+    value of an insertion is that the existing text is not touched, so there is
+    no second place a fact can be lost between here and the re-audit.
+    """
+    from .. import fact_insertion
+
+    for _key, sentence in additions:
+        prompt = fact_insertion.append_sentence(prompt, sentence)
+    return prompt
 
 
 def shared_checks(assembled: dict[str, Any], prompt: str) -> dict[str, Any]:

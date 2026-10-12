@@ -119,16 +119,79 @@ class LockAndGoalPipelineTests(unittest.TestCase):
             generic.new_doc(), "wardrobe", "a red pleated skirt", generic.ORIGIN_ASSET
         )
 
-    def test_a_dropped_locked_fact_triggers_a_repair_that_quotes_the_value(self):
-        fixed = GOOD_PROSE + " She wears a red pleated skirt."
+    def test_a_dropped_locked_fact_is_written_back_into_the_draft(self):
+        """The fact is added to the draft the model wrote, not regenerated around.
+
+        This used to spend a correction, and a correction has to re-emit the
+        whole prompt -- which is how three of them could run and leave five
+        facts missing. The draft here is untouched up to the inserted sentence.
+        """
         backend = _CharacterizedBackend([
             response(GOOD_PROSE, prompt_tokens=10, completion_tokens=40),
-            response(fixed, prompt_tokens=12, completion_tokens=44),
+            response("wardrobe | She is wearing a red pleated skirt.", prompt_tokens=12, completion_tokens=12),
         ])
         result = run(backend, request("Krea2", doc=self.doc()))
-        self.assertTrue(result["format_repair_applied"])
-        self.assertEqual(result["prompt"], fixed)
-        self.assertIn("a red pleated skirt", result["format_repair_reason"])
+        self.assertEqual(result["prompt"], GOOD_PROSE + " She is wearing a red pleated skirt.")
+        self.assertEqual(result["prompt_audit"]["lock_violations"], [])
+        self.assertEqual(result["fact_insertion_restored"], ["Wardrobe"])
+        self.assertFalse(result["format_repair_attempted"], "no correction is needed to add a sentence")
+        self.assertIsNone(result["format_repair_failure"])
+
+    def test_a_fact_the_model_will_not_phrase_is_still_restored(self):
+        """The backstop: a patch that answers with nothing usable is not the end.
+
+        The whole point of the pass is that it cannot fail to the user -- the
+        value is in the document, so a sentence stating it can always be built.
+        """
+        backend = _CharacterizedBackend([
+            response(GOOD_PROSE, prompt_tokens=10, completion_tokens=40),
+            response("Sure! Here is the corrected prompt:", prompt_tokens=12, completion_tokens=8),
+        ])
+        result = run(backend, request("Krea2", doc=self.doc()))
+        self.assertIn("a red pleated skirt", result["prompt"])
+        self.assertTrue(result["prompt"].startswith(GOOD_PROSE))
+        self.assertEqual(result["prompt_audit"]["lock_violations"], [])
+        self.assertEqual(result["fact_insertion_restored"], ["Wardrobe"])
+
+    def test_a_restored_fact_survives_a_correction_that_drops_it_again(self):
+        """Why there is no second insertion pass after the loop.
+
+        The correction here re-emits the prompt without the wardrobe, which is
+        the whole failure mode: it is refused for still failing its audit, so it
+        never enters the candidate list, and the integrated draft wins on
+        severity. An unmet goal is still reported against it -- restoring a fact
+        answers the fact, not the goal.
+        """
+        ledger = [goals.new_goal("do not make it feel like a commercial")]
+        unmet = json.dumps({"verdicts": [{"id": ledger[0]["id"], "met": False, "reason": "reads like an advert"}]})
+        backend = _CharacterizedBackend([
+            response(GOOD_PROSE, prompt_tokens=10, completion_tokens=40),           # draft
+            response(unmet, prompt_tokens=8, completion_tokens=12),                 # first verdict
+            response("wardrobe | She is wearing a red pleated skirt.", prompt_tokens=8, completion_tokens=10),
+            response(unmet, prompt_tokens=8, completion_tokens=12),                 # after the insertion
+            response(GOOD_PROSE, prompt_tokens=12, completion_tokens=40),           # the correction drops it again
+            response(unmet, prompt_tokens=8, completion_tokens=12),
+        ])
+        result = run(backend, request("Krea2", doc=self.doc(), goal_list=ledger))
+        self.assertIn("a red pleated skirt", result["prompt"], "the fact is still restored")
+        self.assertEqual(result["prompt_audit"]["lock_violations"], [])
+        self.assertEqual(result["goals"][0]["verdict"], goals.VERDICT_UNMET)
+        self.assertIsNotNone(result["format_repair_failure"], "an unmet goal is still a warning")
+
+    def test_an_insertion_that_paraphrases_the_fact_away_is_not_trusted(self):
+        """A sentence is held to the same bar as the audit before it is spliced.
+
+        Otherwise the pass "succeeds" and the very next audit reports the fact
+        as still missing -- the loop this exists to end.
+        """
+        backend = _CharacterizedBackend([
+            response(GOOD_PROSE, prompt_tokens=10, completion_tokens=40),
+            response("wardrobe | She is dressed for the weather.", prompt_tokens=12, completion_tokens=10),
+        ])
+        result = run(backend, request("Krea2", doc=self.doc()))
+        self.assertNotIn("dressed for the weather", result["prompt"])
+        self.assertIn("a red pleated skirt", result["prompt"])
+        self.assertEqual(result["prompt_audit"]["lock_violations"], [])
 
     def test_a_deterministic_goal_is_checked_without_a_verifier_call(self):
         ledger = [goals.new_goal("follow the clothing colours in the image", goals.KIND_FIELD, fields=("wardrobe",))]

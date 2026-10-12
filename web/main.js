@@ -244,6 +244,10 @@ function formatGenerationMeta(result) {
   // other measurements of the run, where it is there when you go looking and
   // silent when you are not.
   const repaired = result.format_repair_applied ? " · auto-corrected" : "";
+  // Same reasoning as auto-corrected: a fact that was put back is recorded
+  // beside the other measurements, not announced. Hover says which ones.
+  const restored = (result.fact_insertion_restored || []).length;
+  const written = restored ? ` · ${restored} fact${restored === 1 ? "" : "s"} written back` : "";
   const memory = result.context_tokens ? ` · ${Math.round(result.context_tokens / 1024)}K/${String(result.kv_cache).toUpperCase()}` : "";
   const timing = result.api_provider
     ? `${result.total_seconds.toFixed(1)}s total (${media}s media · ${llm}s provider)`
@@ -254,7 +258,7 @@ function formatGenerationMeta(result) {
   const apiRequests = result.api_provider ? ` · ${result.provider_request_count || 1} API request${result.provider_request_count === 1 ? "" : "s"}` : "";
   const cost = Number.isFinite(result.provider_cost_usd) ? ` · $${result.provider_cost_usd.toFixed(4)} reported` : "";
   const usage = result.api_provider && result.usage_source ? ` · usage ${result.usage_source}` : "";
-  return `${promptLengthMeta(result.prompt)} · ${timing}${speed}${apiRequests}${cost}${usage}${peakVram}${memory}${fallback}${repaired}`;
+  return `${promptLengthMeta(result.prompt)} · ${timing}${speed}${apiRequests}${cost}${usage}${peakVram}${memory}${fallback}${repaired}${written}`;
 }
 
 function syncOutputLengthMeta() {
@@ -1261,6 +1265,18 @@ function bestDraftSummary(result) {
   return best ? `the best of ${(Number(result.format_repair_attempts) || 0) + 1} drafts` : "the first draft";
 }
 
+/** Which established facts were written back into the draft, if any.
+ *
+ * The backend adds the missing sentences to the prompt the model wrote rather
+ * than asking for the whole prompt again — a correction has to re-emit all 450
+ * words, which is how three of them could run and leave five facts missing. */
+function factInsertionDetail(result) {
+  const restored = result.fact_insertion_restored || [];
+  if (!restored.length) return null;
+  const tokens = result.fact_insertion_tokens ? ` (+${result.fact_insertion_tokens} tokens)` : "";
+  return `Written back into the draft without regenerating it${tokens}: ${restored.join(", ")}.`;
+}
+
 /** The repair that already succeeded, for the toast's Technical details. */
 function repairAppliedDetail(result) {
   const method = result.format_repair_multimodal
@@ -2089,7 +2105,11 @@ async function startGenerationPreview() {
     const meta = studio.root.querySelector(".h3ps-editor-meta span:last-child");
     meta.textContent = studio.lastModelMeta;
     // Hovering "auto-corrected" says what was corrected. Nothing pops up to say it.
-    if (result.format_repair_applied) meta.title = repairAppliedDetail(result);
+    const metaTitle = [
+      result.format_repair_applied ? repairAppliedDetail(result) : null,
+      factInsertionDetail(result),
+    ].filter(Boolean).join("\n\n");
+    if (metaTitle) meta.title = metaTitle;
     else meta.removeAttribute("title");
     syncModifiedState();
     saveCurrentModeDraft();
@@ -2108,7 +2128,11 @@ async function startGenerationPreview() {
         `${repairAttemptSummary(result)} did not clear the audit (${auditFailureSummary(result.prompt_audit)}), `
         + `so this is ${bestDraftSummary(result)} — see the goals panel.`
         + (worse ? ` ${worse.message}` : ""),
-        `First draft: ${result.format_repair_reason}\n\nRepair: ${result.format_repair_failure}`,
+        [
+          `First draft: ${result.format_repair_reason}`,
+          `Repair: ${result.format_repair_failure}`,
+          factInsertionDetail(result),
+        ].filter(Boolean).join("\n\n"),
         worse ? worse.action : { label: "Generate again", onClick: () => startGenerationPreview() },
         { dismissOnWorkspaceClick: true },
       );

@@ -81,8 +81,20 @@ Settings card is missing" happens.
 
 `web/main.js` → `web/api/*.js` → routes under `/h3studio` → `assembly.py`
 (validate + build messages from the vendored guide) → `h3_pipeline.py`
-(shared media messages, Thinking fallback, prompt audit, narrow repair,
-normalized metrics) → one provider backend's narrow `complete(...)` callable.
+(shared media messages, Thinking fallback, prompt audit, fact insertion, narrow
+repair, normalized metrics) → one provider backend's narrow `complete(...)` callable.
+
+An audit failure is **additive or structural**, and they are repaired
+differently. A dropped locked fact is absent text: `fact_insertion.py` writes
+the missing sentences into the draft through the target's `integrate_facts`
+hook and never re-emits the prompt, so the pass cannot lose anything. Everything
+else is wrong text and goes to the narrow-repair loop, which does re-emit — and
+therefore runs *after* insertion. The backstop is inside the pass, not after it:
+when the model will not write an acceptable sentence, one is built from the
+document value. There is no second pass, because `accept_repair` keeps a draft
+with a dropped fact out of the candidate list. Do not move a dropped fact back
+into the rewrite loop: a correction that returns all 450 words is how three
+passes left five facts missing.
 
 `backend/routes.py` owns a single module-level `STATE` dict guarded by
 `STATE_LOCK`. Generation and media mutation are mutually exclusive — a busy

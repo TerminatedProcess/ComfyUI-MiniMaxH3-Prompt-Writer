@@ -526,7 +526,14 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 "format_repair_best_attempt",
                 "format_repair_applied", "format_repair_reason",
                 "format_repair_failure", "format_repair_method",
-                "format_repair_multimodal", "format_repair_tokens", "seed", "cold_start",
+                "format_repair_multimodal", "format_repair_tokens",
+                # Facts written back into the draft instead of regenerated
+                # around it, reported by label so "5 facts missing" is
+                # actionable.
+                "fact_insertion_attempted", "fact_insertion_restored",
+                "fact_insertion_unrestored", "fact_insertion_refused",
+                "fact_insertion_tokens",
+                "seed", "cold_start",
                 "model_load_seconds", "tokens_per_second", "context_profile",
                 "context_tokens", "kv_cache", "max_output_tokens",
                 "thinking_budget_reduced", "text_token_source",

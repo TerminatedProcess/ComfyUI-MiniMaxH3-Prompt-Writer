@@ -11,7 +11,7 @@ from .context import (
     non_thinking_output_tokens,
     repair_attempt_budget,
 )
-from . import goals as goal_ledger, prompt_audit
+from . import fact_insertion, generic, goals as goal_ledger, prompt_audit
 from .media import STORE, MediaError
 from .models.contract import ModelError, final_message_text
 from .targets import TargetError, mode_limits, target_for_mode
@@ -362,6 +362,89 @@ def run_h3_pipeline(
 
     goal_verification_tokens = verify_pending_goals(initial_audit, prompt)
 
+    # How many corrections to try before handing the problem back. Each one is
+    # a model call, so this is the user's time being spent: they choose. Read
+    # here because the insertion pass below honours the same setting -- at 0 the
+    # studio promises the writer will not call the model again, and a patch turn
+    # is still a call. It falls back to the literal restoration, which is free.
+    allowed_attempts = repair_attempt_budget(assembled)
+
+    fact_insertion_attempted = False
+    fact_insertion_restored: list[str] = []
+    fact_insertion_tokens = 0
+    fact_insertion_refused: str | None = None
+
+    def integrate_facts(draft: str, audit: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Write dropped established facts back into `draft` without re-emitting it.
+
+        A dropped fact is missing text, not wrong text. The rewrite loop below
+        can only fix it by asking for all 450 words again, which is a fresh
+        chance to drop a different one -- measured as three corrections spent
+        and five facts still missing. This adds the sentences instead, so the
+        rest of the draft is byte-identical and nothing can be lost.
+        """
+        nonlocal fact_insertion_attempted, fact_insertion_tokens, fact_insertion_refused
+        doc = (assembled.get("input") or {}).get("generic")
+        keys = fact_insertion.additive_keys(audit, doc)
+        if not keys or target.integrate_facts is None or is_cancelled():
+            return draft, audit
+        fact_insertion_attempted = True
+        written: dict[str, str] = {}
+        if allowed_attempts > 0:
+            patch_response = complete(
+                messages=fact_insertion.patch_messages(doc, draft, keys),
+                temperature=0.2,
+                top_p=0.9,
+                top_k=40,
+                # A handful of sentences, but still clamped to a manual budget:
+                # asking for more than the user allowed is rejected outright by
+                # some backends, and a refused patch costs the whole pass.
+                max_tokens=(
+                    min(fact_insertion.MAX_PATCH_TOKENS, int(runtime_plan["max_output_tokens"]))
+                    if runtime_plan.get("generation_budget_manual")
+                    else fact_insertion.MAX_PATCH_TOKENS
+                ),
+                seed=seed,
+                thinking=False,
+                purpose="repair",
+            )
+            patch_usage = patch_response.get("usage", {})
+            fact_insertion_tokens += int(patch_usage.get("completion_tokens", 0))
+            usage["prompt_tokens"] = int(usage.get("prompt_tokens", 0)) + int(patch_usage.get("prompt_tokens", 0))
+            usage["completion_tokens"] = int(usage.get("completion_tokens", 0)) + int(patch_usage.get("completion_tokens", 0))
+            patch_text, _patch_reasoning = final_message_text(
+                patch_response["choices"][0]["message"],
+                thinking=False,
+                qwen_reasoning_contract=qwen_reasoning_contract,
+            )
+            written = fact_insertion.parse_patch(patch_text, keys)
+        additions, unresolved = fact_insertion.resolve(doc, draft, keys, written)
+        if not additions:
+            fact_insertion_refused = "no sentence restored a fact without changing the prompt's structure"
+            return draft, audit
+        merged = target.integrate_facts(assembled, draft, additions)
+        merged_audit = _audit(merged, assembled)
+        accepted, refusal = fact_insertion.accept(audit, merged_audit)
+        if not accepted:
+            fact_insertion_refused = refusal
+            return draft, audit
+        restored = [key for key, _sentence in additions if key not in merged_audit.get("lock_violations", [])]
+        fact_insertion_restored.extend(
+            label for label in (generic.label_for(key, doc) for key in restored)
+            if label not in fact_insertion_restored
+        )
+        fact_insertion_refused = (
+            "could not place " + ", ".join(generic.label_for(key, doc) for key in unresolved)
+            if unresolved else None
+        )
+        return merged, merged_audit
+
+    # Before the rewrite loop, not after it: when every complaint is a dropped
+    # fact this clears the audit outright and no correction is spent at all.
+    prompt, initial_audit = integrate_facts(prompt, initial_audit)
+    if fact_insertion_restored:
+        goal_verification_tokens += verify_pending_goals(initial_audit, prompt)
+
     format_repair_attempted = False
     format_repair_applied = False
     format_repair_tokens = 0
@@ -369,9 +452,6 @@ def run_h3_pipeline(
     format_repair_failure = None
     format_repair_method = None
     format_repair_attempts = 0
-    # How many corrections to try before handing the problem back. Each one is
-    # a model call, so this is the user's time being spent: they choose.
-    allowed_attempts = repair_attempt_budget(assembled)
     # The gate is the audit's own verdict, whatever the target. Every audit
     # reports repair_required, so an image target's format failure, a dropped
     # locked fact and an unmet goal all reach the same repair loop.
@@ -482,6 +562,13 @@ def run_h3_pipeline(
                 + ", ".join(initial_audit.get("shared_failures") or ["an unmet goal"])
             )
 
+    # No second insertion pass here, deliberately. Every target's
+    # `accept_repair` refuses a correction that still fails its own audit, so no
+    # draft carrying a dropped fact can enter `candidates` after the integrated
+    # first one -- and a second pass would be handed exactly the keys the first
+    # already failed to place. The backstop that matters is one level down: the
+    # literal sentence inside `fact_insertion.resolve`, which runs whenever the
+    # model will not write an acceptable one.
     generation_seconds = time.perf_counter() - generation_started
     output_tokens = int(usage.get("completion_tokens", 0))
     # Anima answers with a positive and a negative prompt; splitting them here
@@ -516,6 +603,17 @@ def run_h3_pipeline(
         "format_repair_method": format_repair_method,
         "format_repair_multimodal": format_repair_method == "multimodal reference correction",
         "format_repair_tokens": format_repair_tokens,
+        # Facts written back into the draft rather than regenerated around.
+        # Reported by label, because "5 established facts missing" was only ever
+        # actionable if you could see WHICH five.
+        "fact_insertion_attempted": fact_insertion_attempted,
+        "fact_insertion_restored": list(fact_insertion_restored),
+        "fact_insertion_unrestored": [
+            generic.label_for(key, (assembled.get("input") or {}).get("generic") or {})
+            for key in initial_audit.get("lock_violations") or []
+        ],
+        "fact_insertion_refused": fact_insertion_refused,
+        "fact_insertion_tokens": fact_insertion_tokens,
         "seed": seed,
         "tokens_per_second": round(output_tokens / generation_seconds, 2) if generation_seconds > 0 else 0,
     }

@@ -18,7 +18,7 @@ import re
 from .. import heat as heat_levels
 from typing import Any
 
-from .base import Mode, Target, shared_checks, strip_fence
+from .base import Mode, Target, append_facts, shared_checks, strip_fence
 
 BASE_CONTRACT = (
     "Turn the user's brief into one Krea 2 image prompt and return only that prompt. Follow the supplied "
@@ -226,6 +226,7 @@ KREA2 = Target(
     audit=audit,
     repair_plan=repair_plan,
     accept_repair=accept_repair,
+    integrate_facts=append_facts,
     final_contract=final_contract,
     parse_output=parse_output,
 )

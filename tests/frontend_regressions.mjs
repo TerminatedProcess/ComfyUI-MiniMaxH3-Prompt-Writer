@@ -57,6 +57,7 @@ const {
   isGenerationModeAvailable,
   isTextOnlyDirectModel,
   loadCustomSystemPrompts,
+  DEFAULT_REPAIR_ATTEMPTS,
   loadApiProviderConfig,
   loadExternalServerConfig,
   loadOllamaHost,
@@ -532,6 +533,9 @@ test("user preferences persist only stable non-secret settings", () => {
     directGenerationBudget: "custom",
     directGenerationBudgetTokens: 6000,
     directReasoningEffort: "medium",
+    heat: 4,
+    story: false,
+    repairAttempts: 1,
     musicLyricsUseBrief: false,
     fullscreen: true,
     vramHandoff: true,
@@ -559,11 +563,16 @@ test("user preferences persist only stable non-secret settings", () => {
     direct_generation_budget: "custom",
     direct_generation_budget_tokens: 6000,
     direct_reasoning_effort: "medium",
+    repair_attempts: 1,
     music_lyrics_use_brief: false,
     fullscreen: true,
     vram_handoff: true,
     theme: "light",
     interface_size: "125",
+    // Set-and-forget: a Reset or a brand-new session must not hand these back
+    // to the backend's Sensual / Story-builder-on baseline.
+    heat: 4,
+    story: false,
   });
 });
 
@@ -581,6 +590,8 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
       direct_model_id: 123,
       direct_context_profile: "invalid",
       direct_kv_cache: "invalid",
+      heat: 9,
+      story: "yes",
       theme: "sepia",
       interface_size: "140",
     }),
@@ -598,11 +609,16 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
     direct_generation_budget: "auto",
     direct_generation_budget_tokens: null,
     direct_reasoning_effort: "auto",
+    repair_attempts: DEFAULT_REPAIR_ATTEMPTS,
     music_lyrics_use_brief: true,
     fullscreen: false,
     vram_handoff: false,
     theme: "dark",
     interface_size: "100",
+    // An out-of-range level and a non-boolean flag both mean "never chosen", so
+    // the stage leaves the session's own value alone rather than forcing one.
+    heat: null,
+    story: null,
   });
 });
 

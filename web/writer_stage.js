@@ -535,9 +535,30 @@ export function createWriterStage(host) {
   async function persistInputs(patch) {
     if (!session) return;
     session = { ...session, inputs: { ...session.inputs, ...patch } };
+    if ("heat" in patch || "story" in patch) host.rememberWritingFlags?.(patch);
     applySession(await saveInputs({ session_id: host.sessionId(), ...patch }));
     // The Settings panel shows the contract composed with these flags, cached.
     if ("nsfw" in patch || "story" in patch || "variant" in patch) host.invalidateSystemPrompts?.();
+  }
+
+  /** Put the remembered writing dials back over a session's defaults.
+   *
+   *  A new session and a Reset both start at the backend baseline -- Sensual,
+   *  Story builder on -- which quietly undid a dial the user set once and
+   *  expected to keep, and changed what the next prompt said without saying so.
+   *  Only a dial the user has actually touched is remembered, so a first run
+   *  still gets the backend default rather than a hardcoded copy of it. */
+  async function applyRememberedWritingFlags() {
+    if (!session) return;
+    const remembered = host.writingFlags?.() || {};
+    const patch = {};
+    if (Number.isInteger(remembered.heat) && remembered.heat !== heatLevel(session.inputs)) {
+      patch.heat = remembered.heat;
+    }
+    if (typeof remembered.story === "boolean" && remembered.story !== (session.inputs?.story !== false)) {
+      patch.story = remembered.story;
+    }
+    if (Object.keys(patch).length) await persistInputs(patch);
   }
 
   async function build() {
@@ -665,8 +686,11 @@ export function createWriterStage(host) {
       if (scope === "all") {
         host.afterReset();
         // A full reset means defaults, not just empty text: the fresh session
-        // carries duration, ratio and both flags, and the studio holds its own
-        // copies that would otherwise be written straight back.
+        // carries duration and ratio, and the studio holds its own copies that
+        // would otherwise be written straight back. The two writing dials are
+        // the exception -- they are a standing preference, not session content,
+        // so Reset must not move them.
+        await applyRememberedWritingFlags();
         host.applyInputs?.(session?.inputs);
         autoTargetId = null;
         const inferring = targetsForStage().find((target) => target.infers_mode);
@@ -865,6 +889,7 @@ export function createWriterStage(host) {
       mount();
       registry = await getTargets();
       applySession(await getSession(host.sessionId()));
+      await applyRememberedWritingFlags();
       host.applyInputs?.(session?.inputs);
       if (session?.target?.mode) {
         host.selectMode(session.target.mode, { silent: true });

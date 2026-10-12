@@ -17,6 +17,9 @@ const { buildGeneratePayload, isGenerationModeAvailable, stagePayload } =
 // assertion still passed.
 const apiStub = `data:text/javascript;base64,${Buffer.from(`
   export let lastCall = null;
+  // A module namespace is read-only, so a test that wants a clean slate between
+  // two stage actions has to ask the stub to clear it.
+  export const forgetLastCall = () => { lastCall = null; };
   export const getTargets = async () => globalThis.__stageRegistry;
   export const getSession = async () => ({ session: globalThis.__stageSession });
   export const buildGeneric = async (body) => { lastCall = ["build", body]; return { session: globalThis.__stageSession }; };
@@ -49,6 +52,9 @@ const stageModule = await import(`data:text/javascript;base64,${Buffer.from(
     .replace('"./api/h3studio.js"', JSON.stringify(apiStub))
     .replace('"./mode_inference.js"', JSON.stringify(inferenceStub)),
 ).toString("base64")}`);
+// The same specifier string the stage imported, so this is the one module
+// instance -- `lastCall` is what the stage actually sent.
+const apiModule = await import(apiStub);
 
 const image = { type: "image" };
 const video = { type: "video" };
@@ -766,5 +772,54 @@ test("the stage colours come from theme tokens, not hardcoded hex", async () => 
   )).join("\n");
   for (const [, token] of css.matchAll(/var\((--h3ps-[\w-]+)\)/g)) {
     assert.ok(shared.includes(`${token}:`), token);
+  }
+});
+
+test("the writing dials are a standing preference, not session content", async () => {
+  const window = new Window();
+  const previousDocument = globalThis.document;
+  globalThis.document = window.document;
+  try {
+    const root = mountRoot(window);
+    globalThis.__stageRegistry = REGISTRY;
+    globalThis.__stageSession = SESSION;
+    // The fixture session carries the backend baseline -- no heat, so Sensual,
+    // and Story builder off. The user set Graphic with Story builder on weeks
+    // ago, and that is what the stage has to put back.
+    const remembered = { heat: 4, story: true };
+    const saved = [];
+    const stageInstance = stageModule.createWriterStage({
+      ...basicHost(root),
+      writingFlags: () => remembered,
+      rememberWritingFlags: (flags) => saved.push(flags),
+    });
+
+    await stageInstance.start();
+    assert.deepEqual(apiModule.lastCall, [
+      "inputs",
+      { session_id: "11111111-2222-4333-8444-555555555555", heat: 4, story: true },
+    ]);
+
+    // Reset is the path that bit: the fresh session is back at the baseline, so
+    // the dials have to be written over it again rather than silently moving.
+    apiModule.forgetLastCall();
+    await stageInstance.clear({ scope: "all", confirm: false, notify: false });
+    assert.deepEqual(apiModule.lastCall, [
+      "inputs",
+      { session_id: "11111111-2222-4333-8444-555555555555", heat: 4, story: true },
+    ]);
+
+    // A dial the user has never touched leaves the session's own value alone,
+    // so a first run still gets the backend default instead of a copy of it.
+    apiModule.forgetLastCall();
+    const untouched = stageModule.createWriterStage({
+      ...basicHost(mountRoot(window)),
+      writingFlags: () => ({ heat: null, story: null }),
+      rememberWritingFlags: () => {},
+    });
+    await untouched.start();
+    assert.equal(apiModule.lastCall, null);
+  } finally {
+    globalThis.document = previousDocument;
   }
 });

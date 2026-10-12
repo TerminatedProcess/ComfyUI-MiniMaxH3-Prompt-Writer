@@ -4440,6 +4440,14 @@ function createStudio() {
       studio.repairAttempts = Math.max(0, Math.min(MAX_REPAIR_ATTEMPTS, Number(count) || 0));
       saveUserPreferences(localStorage, studio);
     },
+    // Naughty and Story builder are set-and-forget: the session stores them, but
+    // the user's last choice outranks a new or just-reset session's defaults.
+    writingFlags: () => ({ heat: studio.heat, story: studio.story }),
+    rememberWritingFlags: (flags) => {
+      if (Number.isInteger(flags?.heat)) studio.heat = flags.heat;
+      if (typeof flags?.story === "boolean") studio.story = flags.story;
+      saveUserPreferences(localStorage, studio);
+    },
     setStatus: (label) => setGenerationState("busy", label, studio.selectedModel?.name?.split("/").pop() || ""),
     clearStatus: () => setGenerationState("idle"),
     notify: (title, message) => showToast(title, message, null, null, { dismissOnWorkspaceClick: true }),

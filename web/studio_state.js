@@ -19,6 +19,8 @@ const PROVIDERS = ["direct", "external", "ollama", "api"];
 const CONTEXT_PROFILES = ["auto", "low", "standard", "extended", "large", "maximum", "custom"];
 const KV_CACHES = ["auto", "f16", "q8"];
 const GENERATION_BUDGETS = ["auto", "2048", "4096", "8192", "custom"];
+// Mirrors backend/heat.py LEVELS: 0 clean .. 4 graphic.
+const MAX_HEAT = 4;
 const DRAFT_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Krea2", "Anima", "Music3"];
 
 export function isPersistedDraftMode(mode) {
@@ -120,6 +122,11 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
       mode: MODES.includes(value.mode) ? value.mode : "Reference",
       duration_seconds: Number.isInteger(value.duration_seconds) && value.duration_seconds >= 1 && value.duration_seconds <= 20 ? value.duration_seconds : 10,
       aspect_ratio: ASPECT_RATIOS.includes(value.aspect_ratio) ? value.aspect_ratio : "16:9",
+      // `null` means "never chosen", which is not the same as Sensual: it is the
+      // only way the stage can tell a fresh install from a user who set the dial
+      // there on purpose, and only the first needs the backend default.
+      heat: Number.isInteger(value.heat) && value.heat >= 0 && value.heat <= MAX_HEAT ? value.heat : null,
+      story: typeof value.story === "boolean" ? value.story : null,
       active_provider: PROVIDERS.includes(value.active_provider) ? value.active_provider : "direct",
       direct_model_id: typeof value.direct_model_id === "string" && value.direct_model_id ? value.direct_model_id : null,
       direct_context_profile: CONTEXT_PROFILES.includes(value.direct_context_profile) ? value.direct_context_profile : "auto",
@@ -128,6 +135,9 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
       direct_generation_budget: GENERATION_BUDGETS.includes(value.direct_generation_budget) ? value.direct_generation_budget : "auto",
       direct_generation_budget_tokens: Number.isInteger(value.direct_generation_budget_tokens) && value.direct_generation_budget_tokens > 0 ? value.direct_generation_budget_tokens : null,
       direct_reasoning_effort: typeof value.direct_reasoning_effort === "string" && value.direct_reasoning_effort ? value.direct_reasoning_effort : "auto",
+      // Saved since the setting shipped, but never read back: the whitelist
+      // omitted it, so `createStudioState` fell to the default every reload.
+      repair_attempts: Number.isInteger(value.repair_attempts) && value.repair_attempts >= 0 && value.repair_attempts <= MAX_REPAIR_ATTEMPTS ? value.repair_attempts : DEFAULT_REPAIR_ATTEMPTS,
       music_lyrics_use_brief: value.music_lyrics_use_brief !== false,
       fullscreen: value.fullscreen === true,
       vram_handoff: value.vram_handoff === true,
@@ -151,6 +161,11 @@ export function saveUserPreferences(storage, state) {
     mode: MODES.includes(state.mode) ? state.mode : "Reference",
     duration_seconds: Number.isInteger(state.durationSeconds) && state.durationSeconds >= 1 && state.durationSeconds <= 20 ? state.durationSeconds : 10,
     aspect_ratio: ASPECT_RATIOS.includes(state.aspectRatio) ? state.aspectRatio : "16:9",
+    // The two writing dials are set once and left alone, so they outlive the
+    // session that holds them: a Reset used to hand Naughty back to Sensual and
+    // Story builder back on, silently changing what the next prompt would say.
+    heat: Number.isInteger(state.heat) && state.heat >= 0 && state.heat <= MAX_HEAT ? state.heat : null,
+    story: typeof state.story === "boolean" ? state.story : null,
     active_provider: PROVIDERS.includes(state.settingsProvider) ? state.settingsProvider : "direct",
     direct_model_id: typeof state.preferredDirectModelId === "string" && state.preferredDirectModelId ? state.preferredDirectModelId : null,
     direct_context_profile: CONTEXT_PROFILES.includes(state.directContextProfile) ? state.directContextProfile : "auto",
@@ -478,6 +493,10 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     durationSeconds: preferences?.duration_seconds || 10,
     repairAttempts: Number.isInteger(preferences?.repair_attempts) ? preferences.repair_attempts : DEFAULT_REPAIR_ATTEMPTS,
     aspectRatio: preferences?.aspect_ratio || "16:9",
+    // null until the user has touched the dial once; the stage leaves the
+    // session's own value alone while that is the case.
+    heat: Number.isInteger(preferences?.heat) ? preferences.heat : null,
+    story: typeof preferences?.story === "boolean" ? preferences.story : null,
     contextProfile: "auto",
     contextTokens: null,
     kvCache: "auto",

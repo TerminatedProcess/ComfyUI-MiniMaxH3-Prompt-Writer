@@ -284,7 +284,18 @@ def _native_path_dialog(kind: str) -> str | None:
 
 
 def _pick_port(preferred: int) -> int:
+    """The preferred port when it can be served, otherwise any free one.
+
+    SO_REUSEADDR is what makes the answer honest. Closing a server leaves its
+    accepted connections in TIME_WAIT for about a minute, and a bare bind is
+    refused for that whole window -- so restarting the service within a minute
+    of stopping it (which is what a restart IS) found 8506 "occupied" and
+    quietly moved the studio to a random port. `web.run_app` below goes through
+    asyncio's `create_server`, which sets SO_REUSEADDR itself: the probe was
+    rejecting a port the real listener would have taken.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((LOCALHOST, preferred))
             return sock.getsockname()[1]
@@ -323,7 +334,16 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Core:     {app[VERSION_KEY]}")
     print(f"Upstream: {settings.upstream_repo}")
     print(f"Serving:  {url}")
+    if port != settings.port:
+        # Never silently. Under systemd the banner is the only record of where
+        # the studio went, and a relocation nobody is told about is reported as
+        # "it did not come up" -- the bookmark is on the port that was asked for.
+        print(f"NOTE:     port {settings.port} could not be served, so this run moved to {port}.")
     print("Stop with Ctrl+C.")
+    # stdout is a pipe under systemd, so print() is block-buffered: without this
+    # the banner sits in the buffer and the journal shows a started service that
+    # never said anything.
+    sys.stdout.flush()
     if settings.open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     web.run_app(app, host=LOCALHOST, port=port, print=None)

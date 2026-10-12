@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 import sys
 import io
 import tempfile
@@ -13,7 +14,7 @@ from PIL import Image
 
 from backend.gguf_metadata import classify_gguf_file
 from backend.models.contract import ModelError
-from h3_standalone.app import create_app
+from h3_standalone.app import _pick_port, create_app
 from h3_standalone import __version__
 from h3_standalone.config import load_settings, validate_upstream
 from h3_standalone.external_backend import _ManagedChatHandler, standalone_external_backend_class
@@ -569,3 +570,55 @@ class ManagedGGUFTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PortSelectionTest(unittest.TestCase):
+    """The service asks for one port; it has to actually get it.
+
+    Observed: `systemctl --user restart h3-prompt-writer` eight seconds after a
+    stop left the studio on a random port, with nothing in the journal saying
+    so, and was reported as "it is not coming up".
+    """
+
+    @staticmethod
+    def _port_left_in_time_wait() -> int:
+        """A port in exactly the state a just-stopped server leaves behind.
+
+        The server performs the active close, so its own address keeps TIME_WAIT
+        connections for about a minute -- which is well inside the window any
+        restart lands in.
+        """
+        server = socket.socket()
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        port = server.getsockname()[1]
+        server.listen(1)
+        client = socket.socket()
+        client.connect(("127.0.0.1", port))
+        accepted, _ = server.accept()
+        accepted.close()
+        server.close()
+        client.close()
+        return port
+
+    def test_the_preferred_port_survives_a_restart(self):
+        port = self._port_left_in_time_wait()
+        bare = socket.socket()
+        try:
+            with self.assertRaises(OSError, msg="the premise: a bare bind is refused here"):
+                bare.bind(("127.0.0.1", port))
+        finally:
+            bare.close()
+        # aiohttp's listener sets SO_REUSEADDR, so this port IS servable and the
+        # probe must not be the stricter of the two.
+        self.assertEqual(_pick_port(port), port)
+
+    def test_a_genuinely_occupied_port_still_falls_back(self):
+        with socket.socket() as taken:
+            taken.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            taken.bind(("127.0.0.1", 0))
+            taken.listen(1)
+            occupied = taken.getsockname()[1]
+            chosen = _pick_port(occupied)
+        self.assertNotEqual(chosen, occupied)
+        self.assertGreater(chosen, 0)

@@ -1,5 +1,9 @@
 # Standalone changelog
 
+## Unreleased
+
+- **Restarting no longer moves the studio to a different port.** Stopping a server leaves its connections in TIME_WAIT for about a minute, and the check for "is my port free?" was refused for that whole window — so restarting within a minute of stopping, which is what a restart is, found the port occupied and quietly relocated to a random one. The bookmark then pointed at nothing and the studio looked like it had failed to start. The check now matches what the server itself does, so the port you asked for is the port you get. If it genuinely is taken, the move is announced instead of silent, and the startup banner is flushed so a service log always records where the studio actually went.
+
 ## 0.1.7 - 2026-09-11
 
 - Fixed video trimming and cropping failing because NumPy was missing.

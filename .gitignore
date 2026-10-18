@@ -12,3 +12,4 @@ standalone/data/logs/
 standalone/data/tmp/
 # Durable studio session state (see backend/session_store.py)
 data/
+krea2-prompting/

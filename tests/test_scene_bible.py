@@ -202,6 +202,22 @@ class LockViolationTests(unittest.TestCase):
         self.assertEqual(lock_violations(b, "A cramped basement workshop lit by one bulb."), ())
         self.assertEqual(lock_violations(b, "A sunlit meadow stretches away."), ("location",))
 
+    def test_two_letter_name_is_satisfied_by_lowercase_prose(self):
+        # Observed on an Anima compile: Staging and Lighting both carried "TV",
+        # `_PROPER` admitted it as a name, and the lookup set dropped every word
+        # of two characters or fewer -- so the field could not be satisfied by
+        # ANY prompt. Three corrections were spent failing the same check, and a
+        # tag target cannot even write "TV", since its audit fails uppercase.
+        b = bible_with(location=("a dorm TV room, dim, lit by TV screen glow", ORIGIN_ASSET))
+        prose = "college dorm, tv room, tv screen glow, dim lighting, striped shadows"
+        self.assertEqual(lock_violations(b, prose), ())
+
+    def test_two_letter_name_genuinely_absent_still_fails(self):
+        # The loosened lookup must not stop the name being all-or-nothing.
+        b = bible_with(location=("a dorm TV room, dim, lit by TV screen glow", ORIGIN_ASSET))
+        prose = "college dorm, common room, candle glow, dim lighting, striped shadows"
+        self.assertEqual(lock_violations(b, prose), ("location",))
+
     def test_stopwords_alone_do_not_satisfy_a_lock(self):
         b = bible_with(subject=("a man with a red umbrella", ORIGIN_ASSET))
         prose = "A person is in the room with the thing and the other."

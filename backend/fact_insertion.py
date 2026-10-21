@@ -72,7 +72,10 @@ _SCENE_TEMPLATES = {
     "staging": "In frame, {value}.",
     "camera": "The shot is {value}.",
     "lighting": "The lighting is {value}.",
-    "style": "The visual style is {value}.",
+    # Not "visual style": Style is one of the five fields a Music 3 caption can
+    # carry (targets.base._MUSIC_FIELDS), and "the visual style is lo-fi bedroom
+    # pop" is a sentence no caption should contain.
+    "style": "The style is {value}.",
     "mood": "The mood is {value}.",
     "visible_text": "Visible text reads: {value}.",
     "soundscape": "The soundscape is {value}.",

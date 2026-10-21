@@ -191,6 +191,32 @@ class AnimaAuditTests(unittest.TestCase):
         result = anima.audit(draft, assembled("Anima", brief="an explicit nude portrait", variant="base"))
         self.assertIn("tagged safe", " ".join(result["format_failures"]))
 
+    def test_insertion_lands_in_the_positive_block_and_clears_the_lock(self):
+        # A fact appended to the whole prompt would land under Negative:, where
+        # Anima-Turbo never reads it. It belongs on the end of the positive.
+        doc = generic.set_field(
+            generic.new_doc(), "wardrobe", "a leather flight jacket", generic.ORIGIN_ASSET,
+        )
+        request = assembled("Anima", doc=doc)
+        self.assertEqual(anima.audit(GOOD_TAGS, request)["lock_violations"], ["wardrobe"])
+        merged = anima.integrate_facts(
+            request, GOOD_TAGS, [("wardrobe", "She is wearing a leather flight jacket.")],
+        )
+        parsed = anima.parse_output(merged)
+        self.assertIn("leather flight jacket", parsed["prompt"])
+        self.assertNotIn("leather flight jacket", parsed["negative_prompt"])
+        self.assertTrue(parsed["negative_prompt"].startswith("worst quality"))
+        result = anima.audit(merged, request)
+        self.assertEqual(result["lock_violations"], [])
+        # The inserted prose must not be read as a tag and fail the case rule.
+        self.assertEqual(result["format_failures"], [])
+
+    def test_insertion_appends_when_the_draft_has_no_negative_label(self):
+        merged = anima.integrate_facts(
+            assembled("Anima"), "1girl, smile, brown hair", [("mood", "The mood is wistful.")],
+        )
+        self.assertEqual(merged, "1girl, smile, brown hair The mood is wistful.")
+
     def test_locks_are_checked_across_both_prompts(self):
         doc = generic.set_field(generic.new_doc(), "wardrobe", "santa costume", generic.ORIGIN_ASSET)
         self.assertEqual(anima.audit(GOOD_TAGS, assembled("Anima", doc=doc))["lock_violations"], [])

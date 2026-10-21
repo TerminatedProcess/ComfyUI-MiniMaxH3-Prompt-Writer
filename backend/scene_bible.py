@@ -168,6 +168,22 @@ def _tokens(text: str) -> set[str]:
     return {w for w in words if w not in _STOPWORDS and len(w) > 2}
 
 
+def _words(text: str) -> set[str]:
+    """Every word, without the length floor `_tokens` applies.
+
+    `_tokens` ignores anything two characters or shorter: a short word is no
+    evidence of drift inside a ratio. A NAME is not judged by ratio, and
+    `_PROPER` happily matches a two-letter one -- so "TV" was admitted as a name
+    and then looked for in a set that could not contain it, at any length of
+    prompt. The field was therefore unsatisfiable: no rewrite could pass it, and
+    every correction was spent failing the same check. Measured on an Anima
+    compile whose prompt said "tv screen glow" in so many words -- Staging and
+    Lighting both carried "TV", both failed three repairs, and a tag target can
+    never clear it by capitalising, because its own audit fails uppercase tags.
+    """
+    return {_strip_possessive(w) for w in _WORD.findall(text.lower())} - _STOPWORDS
+
+
 def _proper_nouns(text: str) -> set[str]:
     """Capitalised names inside a field value.
 
@@ -263,8 +279,10 @@ def name_check(value: str, prose: str) -> tuple[set[str], set[str]]:
     names = _proper_nouns(value)
     if not names:
         return set(), set()
-    prose_tokens = _tokens(prose)
-    prose_stems = {stem_token(token) for token in prose_tokens}
+    # `_words`, not `_tokens`: a name is matched whole, so the ratio check's
+    # length floor must not decide whether it was findable in the first place.
+    prose_tokens = _words(prose)
+    prose_stems = {stem_token(token) for token in _tokens(prose)}
     prose_names = _proper_nouns(prose)
     sentence_initial = {match.group(1).lower() for match in _SENTENCE_START.finditer(value)}
     considered: set[str] = set()

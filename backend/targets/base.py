@@ -76,9 +76,14 @@ class Target:
     default_variant: str | None = None
     # Splice restored facts into a draft of this target's shape, without
     # re-emitting it (see `backend/fact_insertion.py`). None means the target
-    # opts out and a dropped fact stays with the rewrite loop -- which is the
-    # honest answer for a tag prompt and a music caption, where "one sentence
-    # in the draft's voice" is not a thing that exists.
+    # opts out and a dropped fact stays with the rewrite loop, which re-emits
+    # and can drop a different fact on the way out. No target opts out any more,
+    # and `test_every_target_can_restore_a_dropped_fact_additively` holds the
+    # registry to it: Anima and Music 3 both did, on "a tag prompt and a caption
+    # have nowhere to put a sentence", and both were wrong. Anima's model card
+    # ends the positive prompt with prose and its own audit exempts it; a caption
+    # is prose throughout. It stays Optional only because a future target may
+    # genuinely have no additive shape -- which now has to be argued, not assumed.
     integrate_facts: Callable[[dict[str, Any], str, list[tuple[str, str]]], str] | None = None
     # The closing instruction appended to the user message. It restates the
     # contract where the model is most likely to still be paying attention.
@@ -150,6 +155,14 @@ def compose(base: str, *, remove: tuple[str, ...] = (), add: tuple[str, ...] = (
 # Silent" -- a sound fact demanded of a picture -- and for exclusions, which
 # belong in the negative prompt rather than described in the positive one.
 _SOUND_FIELDS = frozenset({"dialogue", "soundscape", "music"})
+# The mirror of the same rule, which was missing: a music caption cannot carry a
+# wardrobe, a lens or a piece of on-screen text either, and failing it for one is
+# the identical loop with the fields swapped. Listed as what a caption CAN carry,
+# because the document grows and a new field is visual far more often than not --
+# `era`, `style` and `mood` are genuine musical facts, and the sound group is the
+# caption's actual subject matter. `dialogue` stays out: Music 3 takes lyrics as
+# a separate input, so a spoken line is not a thing the caption is meant to hold.
+_MUSIC_FIELDS = frozenset({"era", "style", "mood", "soundscape", "music"})
 # "exclusions" is the one field whose words must NOT appear. The token audit
 # asks the opposite question -- it demanded that "No visible props, furniture,
 # or scenery" be *present* in the prose, and then reported the failure as
@@ -173,6 +186,8 @@ def _auditable(key: str, assembled: dict[str, Any]) -> bool:
     except (TargetError, Exception):
         return True
     if target.workspace == "image" and field in _SOUND_FIELDS:
+        return False
+    if target.workspace == "music" and field not in _MUSIC_FIELDS:
         return False
     if field == "exclusions":
         return False

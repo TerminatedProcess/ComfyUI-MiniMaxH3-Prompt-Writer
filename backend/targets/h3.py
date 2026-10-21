@@ -28,7 +28,7 @@ from ..system_prompts import (
     REFERENCE_SYSTEM_WRAPPER,
     SYSTEM_WRAPPER,
 )
-from .base import Mode, Target, compose, shared_checks
+from .base import Mode, Target, append_facts, compose, shared_checks
 
 # Sentences the flags edit. Each must exist verbatim in its wrapper; `compose`
 # raises if one drifts, so a reworded wrapper cannot silently disable a flag.
@@ -322,4 +322,9 @@ MUSIC3 = Target(
     audit=audit,
     repair_plan=repair_plan,
     accept_repair=accept_repair,
+    # A caption is one prose block, so the restored fact goes on the end -- the
+    # same shape as Krea 2. The five fields a caption is audited on are musical
+    # ones (targets.base._MUSIC_FIELDS); everything visual is filtered out before
+    # it can become a sentence here.
+    integrate_facts=append_facts,
 )

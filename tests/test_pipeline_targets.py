@@ -319,9 +319,36 @@ class LockAndGoalPipelineTests(unittest.TestCase):
         for field in ("soundscape", "dialogue", "music"):
             self.assertTrue(base._auditable(field, {"input": {"mode": "T2VA"}}), field)
             self.assertFalse(base._auditable(field, {"input": {"mode": "Krea2"}}), field)
-        # Everything else is audited on every target, as before.
+        # Everything else is audited on every visual target, as before.
         for field in ("subject", "wardrobe", "pose", "staging", "wardrobe#2"):
             self.assertTrue(base._auditable(field, {"input": {"mode": "Krea2"}}), field)
+
+    def test_a_music_target_is_not_audited_for_anything_visual(self):
+        """The mirror of the sound rule, and the same loop when it is missing.
+
+        A caption cannot carry a wardrobe or a lens, so demanding one is a
+        failure no rewrite can clear -- exactly what "Soundscape must be:
+        Silent" was on Krea 2, with the fields swapped.
+        """
+        from backend.targets import base
+        for field in ("subject", "wardrobe", "pose", "staging", "camera", "lighting",
+                      "visible_text", "location", "weather", "wardrobe#2"):
+            self.assertFalse(base._auditable(field, {"input": {"mode": "Music3"}}), field)
+        # What a caption genuinely is about, so it still answers for these.
+        for field in ("era", "style", "mood", "soundscape", "music"):
+            self.assertTrue(base._auditable(field, {"input": {"mode": "Music3"}}), field)
+
+    def test_every_target_can_restore_a_dropped_fact_additively(self):
+        """No target may send a dropped fact to the rewrite loop.
+
+        The loop re-emits the whole prompt, which is a fresh chance to drop a
+        different fact -- measured as three corrections spent and five facts
+        still missing. A new target that forgets `integrate_facts` inherits that
+        bug silently, so the registry is held to it here.
+        """
+        from backend.targets import TARGETS
+        for target in TARGETS:
+            self.assertIsNotNone(target.integrate_facts, target.id)
 
     def test_the_repair_loop_keeps_trying_until_the_audit_passes(self):
         """The user sets how many corrections to spend before being asked."""

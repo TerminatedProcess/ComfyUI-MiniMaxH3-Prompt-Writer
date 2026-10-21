@@ -292,6 +292,32 @@ def repair_plan(
     }
 
 
+def integrate_facts(assembled: dict[str, Any], prompt: str, additions: list[tuple[str, str]]) -> str:
+    """Restore dropped facts on the end of the POSITIVE block, as trailing prose.
+
+    `Target.integrate_facts` was left None here on the reasoning that a sentence
+    has nowhere to go in a tag prompt. It does: `STORY_CLAUSE` invites the model
+    to close the positive prompt with "one or two natural-language sentences",
+    and `_tag_items` stops at the first sentence-like item precisely so the
+    lowercase and underscore rules never reach them. So an inserted sentence is
+    in-contract -- it just has to land before `Negative:`, since appending to the
+    whole prompt would file the fact under a line the model never reads (and at
+    CFG 1 on Anima-Turbo, does not read at all).
+
+    Without this every dropped fact went to the rewrite loop, which re-emits the
+    entire tag list and is free to drop a different one on the way out.
+    """
+    from .. import fact_insertion
+
+    negative = next((m for m in LABEL.finditer(prompt) if m.group(1).lower() == "negative"), None)
+    # An unlabelled draft is all positive (see `parse_output`), so the plain
+    # append is correct there rather than a case to refuse.
+    head = prompt if negative is None else prompt[: negative.start()]
+    for _key, sentence in additions:
+        head = fact_insertion.append_sentence(head, sentence)
+    return head if negative is None else f"{head.rstrip()}\n{prompt[negative.start():]}"
+
+
 def accept_repair(
     assembled: dict[str, Any],
     prompt: str,
@@ -328,6 +354,7 @@ ANIMA = Target(
     audit=audit,
     repair_plan=repair_plan,
     accept_repair=accept_repair,
+    integrate_facts=integrate_facts,
     final_contract=final_contract,
     parse_output=parse_output,
     variants=VARIANTS,

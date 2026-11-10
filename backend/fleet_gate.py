@@ -38,6 +38,10 @@ COMFY_QUEUE = os.environ.get("H3_FLEET_COMFY_QUEUE", "http://127.0.0.1:8188/queu
 INVOKE_QUEUE = os.environ.get("H3_FLEET_INVOKE_QUEUE", "http://127.0.0.1:9090/api/v1/queue/default/status")
 DASHBOARD = os.environ.get("H3_FLEET_DASHBOARD", "http://127.0.0.1:8090")
 LLM_HEALTH = os.environ.get("H3_FLEET_LLM_HEALTH", "http://127.0.0.1:8890/health")
+# What the studio should connect to once the preset is up: LLM-Redirect, which
+# fronts whichever local engine the preset started. A handed-over session's tab
+# was opened before that engine existed, so it cannot have connected on its own.
+LLM_URL = os.environ.get("H3_FLEET_LLM_URL", "http://127.0.0.1:8892")
 POLL_SECONDS = 5.0
 LLM_READY_TIMEOUT = 180.0
 PROBE_TIMEOUT = aiohttp.ClientTimeout(total=3)
@@ -106,6 +110,7 @@ class FleetGate:
             "session_id": self.session_id,
             "since": self.since,
             "preset": PRESET,
+            "llm_url": LLM_URL if ENABLED else None,
             "error": self.error,
         }
 

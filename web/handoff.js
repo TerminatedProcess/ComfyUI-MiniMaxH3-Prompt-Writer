@@ -80,10 +80,11 @@ export function createHandoff({ root, fetchApi, isBusy, onError }) {
     poll,
     stop: () => clearInterval(timer),
     /** Run a handoff's first build + compile, once. */
-    async autostart({ sessionId, session, refreshModels, build, compile, hasModel }) {
+    async autostart({ sessionId, session, refreshModels, connectLlm, selectMode, build, compile, hasModel }) {
       if (!session?.external) return false;
       const { first } = await call(fetchApi, `/external/session/${encodeURIComponent(sessionId)}/autostarted`, {});
       if (!first) return false;
+      let gate = null;
       const fail = (title, message) => {
         onError(title, message);
         call(fetchApi, `/external/session/${encodeURIComponent(sessionId)}/error`, { message: `${title}: ${message}` }).catch(() => {});
@@ -94,7 +95,7 @@ export function createHandoff({ root, fetchApi, isBusy, onError }) {
       try {
         // Before the model list is read: under the image-server presets the
         // local LLM is not running, so there would be no model to select yet.
-        await call(fetchApi, "/fleet-gate/acquire", { session_id: sessionId });
+        gate = await call(fetchApi, "/fleet-gate/acquire", { session_id: sessionId });
       } catch (error) {
         return fail(error.code === "GPU_WAIT_CANCELLED" ? "Handoff paused" : "Could not prepare the GPU",
           error.code === "GPU_WAIT_CANCELLED" ? "Stopped waiting. Press Build when you are ready." : error.message);
@@ -103,6 +104,18 @@ export function createHandoff({ root, fetchApi, isBusy, onError }) {
         poll();
       }
       await refreshModels();
+      // The tab loaded before the preset started the LLM, so whatever it picked
+      // then is a fallback -- connect the engine the preset just brought up.
+      if (gate?.llm_url) {
+        try {
+          await connectLlm(gate.llm_url);
+        } catch (error) {
+          return fail("Could not connect the local LLM", `${gate.llm_url}: ${error.message || error}`);
+        }
+      }
+      // A text-only fallback model forces T2VA when a picture is attached;
+      // put the target the caller asked for back.
+      if (session.target?.mode) selectMode(session.target.mode);
       if (!hasModel()) return fail("No prompt model selected", "Choose a model, then press Build and Generate.");
       try {
         await build();

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bannerText, takeAutostart } from "../web/handoff.js";
+import { bannerText, createHandoff, takeAutostart } from "../web/handoff.js";
 import { sessionIdFromUrl } from "../web/studio_state.js";
 
 const ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
@@ -28,4 +28,80 @@ test("the gate banner says what it is waiting on, and hides otherwise", () => {
   assert.match(bannerText({ enabled: true, phase: "switching", preset: "Prompt Writer + Generator" }), /Prompt Writer \+ Generator/);
   assert.equal(bannerText({ enabled: true, phase: "idle" }), "");
   assert.equal(bannerText({ enabled: false, phase: "waiting" }), "");
+});
+
+function fakeRoot() {
+  const element = () => ({ hidden: false, textContent: "", addEventListener() {}, querySelector: () => element() });
+  const banner = element();
+  return { querySelector: () => banner };
+}
+
+function fakeFetch(routes) {
+  return async (path, options) => {
+    const handler = routes[path.replace("/h3studio", "")];
+    const [status, body] = handler ? handler(options) : [200, {}];
+    return { ok: status < 400, status, json: async () => body };
+  };
+}
+
+test("autostart connects the preset's LLM after the gate, then restores the caller's target", async () => {
+  const calls = [];
+  const handoff = createHandoff({
+    root: fakeRoot(),
+    fetchApi: fakeFetch({
+      [`/external/session/${ID}/autostarted`]: () => [200, { first: true }],
+      "/fleet-gate/acquire": () => { calls.push("acquire"); return [200, { llm_url: "http://127.0.0.1:8892" }]; },
+    }),
+    isBusy: () => false,
+    onError: (title) => calls.push(`error:${title}`),
+  });
+  try {
+    const ok = await handoff.autostart({
+      sessionId: ID,
+      session: { external: {}, target: { mode: "Krea2" } },
+      refreshModels: async () => calls.push("refresh"),
+      connectLlm: async (url) => calls.push(`connect:${url}`),
+      selectMode: (mode) => calls.push(`mode:${mode}`),
+      hasModel: () => true,
+      build: async () => calls.push("build"),
+      compile: async () => calls.push("compile"),
+    });
+    assert.equal(ok, true);
+    assert.deepEqual(calls, ["acquire", "refresh", "connect:http://127.0.0.1:8892", "mode:Krea2", "build", "compile"]);
+  } finally {
+    handoff.stop();
+  }
+});
+
+test("a failed LLM connect stops the handoff and reports it to the caller", async () => {
+  const reported = [];
+  const handoff = createHandoff({
+    root: fakeRoot(),
+    fetchApi: fakeFetch({
+      [`/external/session/${ID}/autostarted`]: () => [200, { first: true }],
+      "/fleet-gate/acquire": () => [200, { llm_url: "http://127.0.0.1:8892" }],
+      [`/external/session/${ID}/error`]: (options) => { reported.push(JSON.parse(options.body).message); return [200, {}]; },
+    }),
+    isBusy: () => false,
+    onError: () => {},
+  });
+  try {
+    let built = false;
+    const ok = await handoff.autostart({
+      sessionId: ID,
+      session: { external: {}, target: { mode: "Krea2" } },
+      refreshModels: async () => {},
+      connectLlm: async () => { throw new Error("connection refused"); },
+      selectMode: () => {},
+      hasModel: () => true,
+      build: async () => { built = true; },
+      compile: async () => {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(ok, false);
+    assert.equal(built, false);
+    assert.match(reported[0], /Could not connect the local LLM/);
+  } finally {
+    handoff.stop();
+  }
 });

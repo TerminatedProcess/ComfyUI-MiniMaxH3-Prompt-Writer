@@ -3124,6 +3124,22 @@ async function connectExternalServer(form) {
   }
 }
 
+/** Connect and select an OpenAI-shaped llama.cpp endpoint by URL (handoff autostart).
+ *  Saved like a manual Connect, so the next visit reconnects on its own. Throws on failure. */
+async function connectExternalUrl(url) {
+  studio.modelSelectionRevision = (studio.modelSelectionRevision || 0) + 1;
+  studio.externalConnectionAttempt = (studio.externalConnectionAttempt || 0) + 1;
+  const result = await probeExternalServer({ url, model: "" });
+  const saved = { url: result.model.endpoint, model: result.model.remote_model };
+  studio.externalServerConfig = saved;
+  studio.externalServerError = null;
+  studio.externalModel = result.model;
+  saveExternalServerConfig(localStorage, saved);
+  studio.models = [...studio.models.filter((model) => model.family !== "external"), result.model];
+  selectModel(result.model);
+  return result.model;
+}
+
 function disconnectExternalServer() {
   studio.externalConnectionAttempt = (studio.externalConnectionAttempt || 0) + 1;
   const wasSelected = studio.selectedModel?.family === "external";
@@ -4625,6 +4641,15 @@ function createStudio() {
     sessionId: studio.sessionId,
     session: studio.stage?.session(),
     refreshModels,
+    connectLlm: connectExternalUrl,
+    selectMode: (mode) => {
+      if (mode === studio.mode) return;
+      studio.mode = mode;
+      if (mode !== "Music3") studio.lastVideoMode = mode;
+      syncWorkspace();
+      renderMedia(studio.mode);
+      studio.stage?.render();
+    },
     build: () => studio.stage.build(),
     compile: startGenerationPreview,
     hasModel: () => Boolean(studio.selectedModel?.runtime_ready),

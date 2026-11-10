@@ -123,6 +123,18 @@ export function settingsMarkup(icon) {
               <span><strong>Krea 2</strong><small>Krea 2 image prompts</small></span>
               <span><em data-system-prompt-summary-status="krea2">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
             </button>
+            <button type="button" data-system-prompt-profile="qwenimage">
+              <span><strong>Qwen-Image</strong><small>Qwen-Image captions</small></span>
+              <span><em data-system-prompt-summary-status="qwenimage">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+            </button>
+            <button type="button" data-system-prompt-profile="flux3">
+              <span><strong>FLUX 3</strong><small>FLUX 3 Klein captions</small></span>
+              <span><em data-system-prompt-summary-status="flux3">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+            </button>
+            <button type="button" data-system-prompt-profile="mossimage">
+              <span><strong>MOSS-Image</strong><small>MOSS-Image captions</small></span>
+              <span><em data-system-prompt-summary-status="mossimage">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+            </button>
             <button type="button" data-system-prompt-profile="anima">
               <span><strong>Anima</strong><small>Anima tag prompts</small></span>
               <span><em data-system-prompt-summary-status="anima">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
@@ -136,6 +148,9 @@ export function settingsMarkup(icon) {
             ${systemPromptPanel("standard", "Standard", "Instructions used by T2VA, I2VA, FL2VA and L2VA.", icon)}
             ${systemPromptPanel("reference", "Reference", "Instructions used by Reference mode.", icon, true)}
             ${systemPromptPanel("krea2", "Krea 2", "Instructions used for Krea 2 prompts. The default shown reflects your Naughty and Story builder settings; an edit here replaces it entirely and the flags stop changing it.", icon, true)}
+            ${systemPromptPanel("qwenimage", "Qwen-Image", "Instructions used for Qwen-Image captions. The default shown reflects your Naughty and Story builder settings; an edit here replaces it entirely and the flags stop changing it.", icon, true)}
+            ${systemPromptPanel("flux3", "FLUX 3", "Instructions used for FLUX 3 captions. The default shown reflects your Naughty and Story builder settings; an edit here replaces it entirely and the flags stop changing it.", icon, true)}
+            ${systemPromptPanel("mossimage", "MOSS-Image", "Instructions used for MOSS-Image captions. The default shown reflects your Naughty and Story builder settings; an edit here replaces it entirely and the flags stop changing it.", icon, true)}
             ${systemPromptPanel("anima", "Anima", "Instructions used for Anima prompts. The default shown reflects your Naughty, Story builder and variant settings; an edit here replaces it entirely and those stop changing it.", icon, true)}
             ${systemPromptPanel("sdtags", "SD tags", "Instructions used for SDXL, Illustrious, Pony and SD 1.5 tag prompts. The default shown reflects your Naughty, Story builder and variant settings; an edit here replaces it entirely and those stop changing it.", icon, true)}
           </div>

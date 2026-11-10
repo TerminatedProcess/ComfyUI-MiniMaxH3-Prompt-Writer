@@ -53,6 +53,18 @@ class BaseMapTests(unittest.TestCase):
         self.assertEqual(resolve("minimax-h3"), ("T2VA", None))
         self.assertEqual(resolve("minimax-h3", image_count=1), ("I2VA", None))
 
+    def test_the_natural_language_bases_map_to_their_vendor_targets(self):
+        self.assertEqual(resolve("qwen-image", variant="generate"), ("QwenImage", None))
+        self.assertEqual(resolve("qwen-image-2-1", variant="qwen_image_21_base"), ("QwenImage", None))
+        self.assertEqual(resolve("flux3", variant="flux3_klein_base"), ("Flux3", None))
+        self.assertEqual(resolve("moss-image"), ("MossImage", None))
+
+    def test_a_qwen_edit_checkpoint_is_refused(self):
+        # An edit model wants "make the sky red", not a description of the result.
+        with self.assertRaises(TargetError) as caught:
+            resolve("qwen-image", variant="edit")
+        self.assertEqual(caught.exception.code, "UNSUPPORTED_TARGET")
+
     def test_sdxl_family_picks_the_quality_vocabulary(self):
         self.assertEqual(resolve("sdxl"), ("SDTags", "sdxl"))
         self.assertEqual(resolve("sdxl", family="Illustrious"), ("SDTags", "illustrious"))
@@ -60,7 +72,7 @@ class BaseMapTests(unittest.TestCase):
         self.assertEqual(resolve("sdxl", family="Pony"), ("SDTags", "pony"))
 
     def test_an_unmapped_base_is_refused_not_guessed(self):
-        for base in ("flux3", "qwen-image", "z-image", "", "moss-image"):
+        for base in ("flux", "z-image", "ltx-2", "", "wan"):
             with self.assertRaises(TargetError) as caught:
                 resolve(base)
             self.assertEqual(caught.exception.code, "UNSUPPORTED_TARGET")
@@ -195,7 +207,7 @@ class HandoffRouteTests(unittest.TestCase):
         self.assertEqual(state["external"]["negative"], "lowres")
 
     def test_unsupported_base_is_a_422(self):
-        status, payload = self.create(base="flux3")
+        status, payload = self.create(base="z-image")
         self.assertEqual(status, 422)
         self.assertEqual(payload["error"]["code"], "UNSUPPORTED_TARGET")
 
@@ -402,3 +414,49 @@ class FleetGateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from backend import guides  # noqa: E402
+from backend.targets import FLUX3, MOSS_IMAGE, QWEN_IMAGE  # noqa: E402
+
+
+class ProseFamilyTests(unittest.TestCase):
+    CAPTION = " ".join(["A weathered fisherman mends a green net on a wooden pier at dawn."] * 14)
+
+    def _assembled(self, mode):
+        return {"input": {"mode": mode, "nsfw": True}, "messages": [{"role": "user", "content": "brief"}]}
+
+    def test_each_vendor_guide_excerpts_to_its_prompting_rules(self):
+        self.assertIn("Image Prompt Rewriting Expert", guides.qwen_image_prompting_excerpt())
+        self.assertNotIn("def polish_prompt_zh", guides.qwen_image_prompting_excerpt())
+        self.assertIn("prompt upsampler", guides.flux3_prompting_excerpt())
+        self.assertIn("Prompt Guidelines", guides.moss_image_prompting_excerpt())
+        self.assertNotIn("Layout Prompts", guides.moss_image_prompting_excerpt())
+        self.assertIn("cohesive", guides.moss_image_caption_excerpt())
+
+    def test_a_good_caption_passes_and_json_echo_of_the_guide_format_fails(self):
+        for target in (QWEN_IMAGE, FLUX3, MOSS_IMAGE):
+            mode = target.modes[0].id
+            self.assertFalse(target.audit(self.CAPTION, self._assembled(mode))["repair_required"], target.id)
+            echoed = '{"rewritten_prompt": "' + self.CAPTION + '", "wh_ratio": "16:9"}'
+            self.assertTrue(target.audit(echoed, self._assembled(mode))["repair_required"], target.id)
+            self.assertTrue(target.audit("A fisherman.", self._assembled(mode))["repair_required"], target.id)
+
+    def test_only_moss_returns_a_negative_and_it_never_carries_nsfw(self):
+        self.assertEqual(QWEN_IMAGE.parse_output("x")["negative_prompt"], "")
+        self.assertEqual(FLUX3.parse_output("x")["negative_prompt"], "")
+        negative = MOSS_IMAGE.parse_output("x")["negative_prompt"]
+        self.assertIn("worst quality", negative)
+        self.assertNotIn("nsfw", negative)
+
+    def test_assembly_sends_the_vendor_guide(self):
+        session = "11111111-2222-4333-8444-555555555555"
+        expected = {
+            "QwenImage": "official_qwen_image_prompt_enhancement",
+            "Flux3": "official_flux3_prompt_upsampler",
+            "MossImage": "official_moss_image_prompt_guidelines",
+        }
+        for mode, name in expected.items():
+            assembled = assemble_request({"mode": mode, "session_id": session, "creative_brief": "a pier at dawn"})
+            names = [m.get("name") for m in assembled["messages"] if m["role"] == "system"]
+            self.assertIn(name, names, mode)

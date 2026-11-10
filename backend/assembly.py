@@ -233,27 +233,25 @@ GUIDE_MESSAGE_NAMES = {
     "anima": "official_anima_prompting_rules",
     "illustrious": "official_illustrious_prompting_rules",
     "pony": "official_pony_prompting_rules",
+    "qwen_image": "official_qwen_image_prompt_enhancement",
+    "flux3": "official_flux3_prompt_upsampler",
+    "moss_image": "official_moss_image_prompt_guidelines",
+    "moss_image_enhancer": "official_moss_image_caption_rules",
 }
 
 
 def _guide_content(guide_id: str) -> str:
     """The text of one guide, excerpted where the whole file would be waste."""
-    from .guides import (
-        anima_prompting_excerpt,
-        illustrious_prompting_excerpt,
-        krea2_examples_excerpt,
-        pony_prompting_excerpt,
-    )
+    from .guides import guide_excerpt, krea2_examples_excerpt
 
     if guide_id == "krea2":
         return krea2_examples_excerpt()
     if guide_id == "anima":
+        from .guides import anima_prompting_excerpt
+
         return anima_prompting_excerpt()
-    if guide_id == "illustrious":
-        return illustrious_prompting_excerpt()
-    if guide_id == "pony":
-        return pony_prompting_excerpt()
-    return load_guide(guide_id)["content"]
+    # New guides declare their excerpt on the spec instead of adding a branch.
+    return guide_excerpt(guide_id)
 
 
 def _guide_messages(mode: str, system_prompt: str, variant: str | None = None) -> list[dict[str, str]]:

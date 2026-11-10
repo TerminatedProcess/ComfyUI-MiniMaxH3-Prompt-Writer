@@ -17,9 +17,10 @@ from .anima import ANIMA
 from .base import Mode, Target, TargetError, compose, restore_locked_tokens, shared_checks, strip_fence
 from .h3 import H3, MUSIC3
 from .krea2 import KREA2
+from .prose_family import FLUX3, MOSS_IMAGE, QWEN_IMAGE
 from .sdtags import SDTAGS
 
-TARGETS: tuple[Target, ...] = (H3, KREA2, ANIMA, SDTAGS, MUSIC3)
+TARGETS: tuple[Target, ...] = (H3, KREA2, QWEN_IMAGE, FLUX3, MOSS_IMAGE, ANIMA, SDTAGS, MUSIC3)
 BY_ID = {target.id: target for target in TARGETS}
 # mode id -> (target, mode). Modes are globally unique; the registry asserts it.
 _MODE_INDEX: dict[str, tuple[Target, Mode]] = {}

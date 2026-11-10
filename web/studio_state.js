@@ -13,7 +13,7 @@ export const INTERFACE_SIZES = ["100", "110", "120", "125"];
 // Every mode the studio can persist a draft or preference for. The registry
 // (GET /targets) is authoritative for what exists; this list only has to cover
 // what localStorage may legitimately hold.
-const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Krea2", "Anima", "SDTags", "Music3"];
+const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Krea2", "QwenImage", "Flux3", "MossImage", "Anima", "SDTags", "Music3"];
 const ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"];
 const PROVIDERS = ["direct", "external", "ollama", "api"];
 const CONTEXT_PROFILES = ["auto", "low", "standard", "extended", "large", "maximum", "custom"];
@@ -21,7 +21,7 @@ const KV_CACHES = ["auto", "f16", "q8"];
 const GENERATION_BUDGETS = ["auto", "2048", "4096", "8192", "custom"];
 // Mirrors backend/heat.py LEVELS: 0 clean .. 4 graphic.
 const MAX_HEAT = 4;
-const DRAFT_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Krea2", "Anima", "SDTags", "Music3"];
+const DRAFT_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Krea2", "QwenImage", "Flux3", "MossImage", "Anima", "SDTags", "Music3"];
 
 export function isPersistedDraftMode(mode) {
   return DRAFT_MODES.includes(mode);
@@ -318,6 +318,9 @@ export function systemPromptProfile(mode) {
   if (mode === "Krea2") return "krea2";
   if (mode === "Anima") return "anima";
   if (mode === "SDTags") return "sdtags";
+  if (mode === "QwenImage") return "qwenimage";
+  if (mode === "Flux3") return "flux3";
+  if (mode === "MossImage") return "mossimage";
   return mode === "Reference" || mode === "reference" ? "reference" : "standard";
 }
 

@@ -5,6 +5,12 @@
 ### Added
 
 - **SD tags target: SDXL, Illustrious, Pony and SD 1.5.** A new image target writes comma-tag prompt pairs with `(word:1.2)` weights, and its variant picks the quality vocabulary, because each model needs a different one. Pony gets the full `score_9, score_8_up, …` string its description says it was trained on. Illustrious gets Danbooru tags with `masterpiece, best quality` and no score tags. SD 1.5 keeps the important tags inside its first 75 tokens. These are written from the official Illustrious XL model card and the Pony Diffusion V6 description, both vendored and hash-pinned.
+- **Qwen-Image, FLUX 3 and MOSS-Image targets.** Each one is written from the prompt-rewriter instructions its vendor publishes for the model:
+  - Qwen-Image: Qwen's prompt-enhancement system prompt, which also covers 2512 and 2.1.
+  - FLUX 3 Image Klein: Black Forest Labs' upsampler prompt for outside models. BFL says the model is trained on those captions and is noticeably weaker without them.
+  - MOSS-Image: the user guide and its enhancer's caption rules.
+
+  All three write one long descriptive caption. MOSS-Image also gets its recommended negative prompt. Qwen-Image edit checkpoints are refused, because they take an edit instruction, not a description of the finished image.
 - **Other apps can hand a prompt to the writer.** `POST /h3studio/external/session` takes a prompt, a negative, the caller's model base (InvokeAI names: `sdxl`, `sd-1`, `krea-2`, `anima`, `minimax-h3`) and optionally an image. It returns a session and a URL that opens the studio on it, then builds and compiles once. `GET /h3studio/external/session/{id}` returns the best prompt for that target. A base with no target, such as Flux or Qwen-Image, is refused with `UNSUPPORTED_TARGET` rather than mapped to the nearest one. LoRA tags, embeddings and trigger words the caller locks are put back verbatim if the model drops one, because a trigger word that is one character off stops the LoRA from working.
 - **The writer waits instead of interrupting a render** (local service layouts only, `H3_FLEET_GATE=1`). Before loading a local model it checks ComfyUI's and InvokeAI's queues. While either has jobs it waits and says so with a silent desktop notification and a banner. You can **Cancel** the wait, or **Go ahead**, which stops their jobs. It then switches services through the Service Dashboard preset instead of starting engines itself.
 

@@ -125,7 +125,7 @@ class GenericRouteTests(unittest.TestCase):
     def test_the_target_catalog_is_served_for_the_studio(self):
         status, payload = self.call("GET", "/targets")
         self.assertEqual(status, 200)
-        self.assertEqual({item["id"] for item in payload["targets"]}, {"h3", "krea2", "anima", "sdtags", "music3"})
+        self.assertEqual({item["id"] for item in payload["targets"]}, {"h3", "krea2", "qwenimage", "flux3", "mossimage", "anima", "sdtags", "music3"})
         self.assertEqual(payload["workspaces"], ["image", "video", "music"])
         self.assertEqual(payload["generic"]["fields"], list(generic.FIELDS))
         self.assertIn("judged", payload["goal_kinds"])

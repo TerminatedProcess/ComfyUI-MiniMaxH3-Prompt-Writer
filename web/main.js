@@ -307,6 +307,9 @@ async function syncSystemPromptEditor(profile) {
     krea2: "Krea2",
     anima: "Anima",
     sdtags: "SDTags",
+    qwenimage: "QwenImage",
+    flux3: "Flux3",
+    mossimage: "MossImage",
   }[profile] || "T2VA";
   textarea.disabled = true;
   if (!studio.systemPromptDefaults[profile]) {
@@ -346,6 +349,9 @@ function syncSystemPromptEditors() {
     syncSystemPromptEditor("krea2"),
     syncSystemPromptEditor("anima"),
     syncSystemPromptEditor("sdtags"),
+    syncSystemPromptEditor("qwenimage"),
+    syncSystemPromptEditor("flux3"),
+    syncSystemPromptEditor("mossimage"),
     syncSystemPromptEditor("music3"),
     syncSystemPromptEditor("music3_lyrics"),
   ]);
@@ -353,7 +359,7 @@ function syncSystemPromptEditors() {
 
 function setSystemPromptProfile(profile) {
   if (!studio) return;
-  studio.settingsPromptProfile = ["reference", "krea2", "anima", "sdtags"].includes(profile) ? profile : "standard";
+  studio.settingsPromptProfile = ["reference", "krea2", "anima", "sdtags", "qwenimage", "flux3", "mossimage"].includes(profile) ? profile : "standard";
   studio.root.querySelectorAll("[data-system-prompt-profile]").forEach((button) => {
     const selected = button.dataset.systemPromptProfile === studio.settingsPromptProfile;
     button.classList.toggle("is-selected", selected);

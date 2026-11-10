@@ -73,7 +73,10 @@ lives in `backend/generic.py`.
 
 `backend/targets/` is the registry: one owner per mode, one place the UI reads.
 `h3.py`, `krea2.py`, `anima.py`, `sdtags.py` (SDXL / Illustrious / Pony / SD 1.5 as
-variants of one tag target) plus `base.py`. `external_map.py` is the only place
+variants of one tag target), `prose_family.py` (Qwen-Image, FLUX 3, MOSS-Image: one
+factory, each written from its vendor's own rewriter prompt) plus `base.py`. A new
+guide's excerpt is declared on its `GuideSpec.excerpt`, not as another branch in
+`assembly._guide_content`. `external_map.py` is the only place
 another app's model base (InvokeAI ids) becomes a mode + variant; unmapped bases
 are `UNSUPPORTED_TARGET`, never guessed. Adding a model is a spec module
 and a vendored guide — **not** a new branch in the pipeline, the route handlers

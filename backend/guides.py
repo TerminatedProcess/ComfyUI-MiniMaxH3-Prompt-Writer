@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from typing import Callable
 from functools import lru_cache
 from pathlib import Path
 
@@ -24,6 +25,15 @@ ILLUSTRIOUS_SOURCE_ROOT = (
 # file is the `description` field of /api/v1/models/257749 as fetched 2026-11-10.
 PONY_REVISION = "civitai-model-257749-version-290640"
 PONY_SOURCE_ROOT = "https://civitai.com/api/v1/models"
+# Qwen-Image's prompt-enhancement system prompt, from the Apache-2.0 GitHub repo.
+# Deliberately NOT the Qwen-Image-2.1-PE-T2I `system_prompt.txt`: that file is
+# under the non-commercial `qwen-research` licence, and this repository is MIT.
+QWEN_IMAGE_REVISION = "6b5e1f5cec987d404be5ac6657db3b9aacb56a89"
+QWEN_IMAGE_SOURCE_ROOT = f"https://github.com/QwenLM/Qwen-Image/blob/{QWEN_IMAGE_REVISION}/src/examples/tools"
+FLUX3_REVISION = "bfc8889a4497f846416f253a3972a1941ac698b9"
+FLUX3_SOURCE_ROOT = f"https://github.com/black-forest-labs/flux-3-image-klein/blob/{FLUX3_REVISION}/src/flux3"
+MOSS_REVISION = "6be4453024c5acae9dcd0a191e26ee524e743310"
+MOSS_SOURCE_ROOT = f"https://github.com/OpenMOSS/MOSS-Image/blob/{MOSS_REVISION}"
 
 
 @dataclass(frozen=True)
@@ -39,6 +49,10 @@ class GuideSpec:
     source_revision: str = SOURCE_REVISION
     source_basename: str | None = None
     vendor: str = "MiniMax"
+    # Name of the function in this module that cuts the file down to what helps
+    # write a prompt. None sends the whole file. Named rather than a callable so
+    # the spec stays plain data (it is serialised into the guide catalogue).
+    excerpt: str | None = None
 
     @property
     def source_url(self) -> str:
@@ -97,6 +111,7 @@ GUIDES = {
         source_revision=ILLUSTRIOUS_REVISION,
         source_basename="README.md",
         vendor="OnomaAI Research",
+        excerpt="illustrious_prompting_excerpt",
     ),
     "pony": GuideSpec(
         id="pony",
@@ -107,6 +122,51 @@ GUIDES = {
         source_revision=PONY_REVISION,
         source_basename="257749",
         vendor="PurpleSmartAI",
+        excerpt="pony_prompting_excerpt",
+    ),
+    "qwen_image": GuideSpec(
+        id="qwen_image",
+        title="Qwen-Image Prompt Enhancement System Prompt",
+        filename="QWEN_IMAGE_2512_PROMPT_UTILS.py.txt",
+        source_sha256="87c0ad84d417ee116d73a51e85c880b9dd8caa7f206d567c557c663fa48360ba",
+        source_root=QWEN_IMAGE_SOURCE_ROOT,
+        source_revision=QWEN_IMAGE_REVISION,
+        source_basename="prompt_utils_2512.py",
+        vendor="Qwen",
+        excerpt="qwen_image_prompting_excerpt",
+    ),
+    "flux3": GuideSpec(
+        id="flux3",
+        title="FLUX 3 Image Klein Prompt Upsampler (external VLM)",
+        filename="FLUX3_KLEIN_PUP_PROMPTS_EXTERNAL_VLM.json",
+        source_sha256="361bb6e081d50e54a3dee9abf26327436a9386c83465f881c7848989232028be",
+        source_root=FLUX3_SOURCE_ROOT,
+        source_revision=FLUX3_REVISION,
+        source_basename="pup_prompts_external_vlm.json",
+        vendor="Black Forest Labs",
+        excerpt="flux3_prompting_excerpt",
+    ),
+    "moss_image": GuideSpec(
+        id="moss_image",
+        title="MOSS-Image User Guide",
+        filename="MOSS_IMAGE_USERGUIDE_en.md",
+        source_sha256="a03845c2cb582ea448e407ac7c81e7437daec1642509529461471fd82eda4976",
+        source_root=MOSS_SOURCE_ROOT,
+        source_revision=MOSS_REVISION,
+        source_basename="USERGUIDE.md",
+        vendor="OpenMOSS",
+        excerpt="moss_image_prompting_excerpt",
+    ),
+    "moss_image_enhancer": GuideSpec(
+        id="moss_image_enhancer",
+        title="MOSS-Image Prompt Enhancer Skill",
+        filename="MOSS_IMAGE_PROMPT_ENHANCER_SKILL_en.md",
+        source_sha256="72cd39883af0b6c6997038b068af2d858dcd968ca43466ebf93fea21833878a0",
+        source_root=MOSS_SOURCE_ROOT,
+        source_revision=MOSS_REVISION,
+        source_basename="skills/moss-image-prompt-enhancer/SKILL.md",
+        vendor="OpenMOSS",
+        excerpt="moss_image_caption_excerpt",
     ),
 }
 MODE_GUIDES = {
@@ -259,6 +319,62 @@ def pony_prompting_excerpt() -> str:
     if start < 0 or end < 0:
         raise RuntimeError("Could not extract the prompting rules from the official Pony Diffusion V6 description.")
     return "# Pony Diffusion V6 XL prompting (official model description)\n\n" + content[start:end].strip() + "\n"
+
+
+def _markdown_section(content: str, heading: str, stop: str) -> str:
+    start = content.find(heading)
+    end = content.find(stop, start + len(heading)) if start >= 0 else -1
+    if start < 0:
+        raise RuntimeError(f"Could not find {heading!r} in a vendored guide.")
+    return content[start:end if end >= 0 else None].strip()
+
+
+@lru_cache(maxsize=1)
+def qwen_image_prompting_excerpt() -> str:
+    """The English SYSTEM_PROMPT string out of Qwen's prompt_utils_2512.py.
+
+    The file is Python (an API wrapper plus the English and Chinese prompts);
+    only the English rewriting instructions are guidance for writing a prompt.
+    """
+    content = load_guide("qwen_image")["content"]
+    body = content.split("def polish_prompt_en", 1)[-1]
+    start = body.find("SYSTEM_PROMPT = '''")
+    end = body.find("'''", start + 20)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not extract the English system prompt from the official Qwen-Image prompt utils.")
+    return body[start + len("SYSTEM_PROMPT = '''"):end].strip() + "\n"
+
+
+@lru_cache(maxsize=1)
+def flux3_prompting_excerpt() -> str:
+    """The text-to-image upsampler prompt BFL publishes for use with an outside VLM."""
+    import json
+
+    data = json.loads(load_guide("flux3")["content"])
+    text = data.get("t2i") if isinstance(data, dict) else None
+    if not isinstance(text, str) or len(text) < 500:
+        raise RuntimeError("Could not extract the t2i upsampler prompt from the official FLUX 3 prompts.")
+    return text.strip() + "\n"
+
+
+@lru_cache(maxsize=1)
+def moss_image_prompting_excerpt() -> str:
+    """Prompt Guidelines, without the experimental JSON layout format."""
+    content = load_guide("moss_image")["content"]
+    return _markdown_section(content, "## Prompt Guidelines", "### Layout Prompts") + "\n"
+
+
+@lru_cache(maxsize=1)
+def moss_image_caption_excerpt() -> str:
+    """The enhancer's Caption deliverable: cohesive prose, visible text quoted exactly."""
+    content = load_guide("moss_image_enhancer")["content"]
+    return _markdown_section(content, "## Caption", "## Layout") + "\n"
+
+
+def guide_excerpt(guide_id: str) -> str:
+    """A guide's text as it is sent to the model: its declared excerpt, or the whole file."""
+    name = GUIDES[guide_id].excerpt
+    return globals()[name]() if name else load_guide(guide_id)["content"]
 
 
 def guide_catalog() -> list[dict[str, str | list[str]]]:

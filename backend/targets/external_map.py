@@ -40,4 +40,14 @@ def resolve(
         return "SDTags", "sdxl"
     if key in {"sd-1", "sd1", "sd-1.5"}:
         return "SDTags", "sd1"
+    if key in {"qwen-image", "qwen-image-2-1"}:
+        if str(variant or "").strip().lower() == "edit":
+            # An edit checkpoint takes an instruction ("make the sky red"), not a
+            # description of the finished image -- a different job entirely.
+            raise TargetError("UNSUPPORTED_TARGET", "Qwen-Image edit models take edit instructions, not scene prompts.")
+        return "QwenImage", None
+    if key == "flux3":
+        return "Flux3", None
+    if key == "moss-image":
+        return "MossImage", None
     raise TargetError("UNSUPPORTED_TARGET", f"The writer has no prompt target for base {base!r} yet.")

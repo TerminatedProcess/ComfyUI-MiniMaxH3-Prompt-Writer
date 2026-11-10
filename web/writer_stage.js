@@ -1068,6 +1068,8 @@ export function createWriterStage(host) {
     refresh: async () => applySession(await getSession(host.sessionId())),
     /** Clear scope: "prompts" keeps what you supplied, "all" is Reset. */
     clear: (options) => reset(options),
+    /** Build the generic prompt from the brief (the handoff's autostart uses it). */
+    build,
     /** Write the brief from one attached image (double-click on its card). */
     describe,
     /** Write the brief from every attached image, in order. */

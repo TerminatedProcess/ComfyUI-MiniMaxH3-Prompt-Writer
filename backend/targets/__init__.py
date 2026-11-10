@@ -14,11 +14,12 @@ from typing import Any
 
 from ..guides import load_guide
 from .anima import ANIMA
-from .base import Mode, Target, TargetError, compose, shared_checks, strip_fence
+from .base import Mode, Target, TargetError, compose, restore_locked_tokens, shared_checks, strip_fence
 from .h3 import H3, MUSIC3
 from .krea2 import KREA2
+from .sdtags import SDTAGS
 
-TARGETS: tuple[Target, ...] = (H3, KREA2, ANIMA, MUSIC3)
+TARGETS: tuple[Target, ...] = (H3, KREA2, ANIMA, SDTAGS, MUSIC3)
 BY_ID = {target.id: target for target in TARGETS}
 # mode id -> (target, mode). Modes are globally unique; the registry asserts it.
 _MODE_INDEX: dict[str, tuple[Target, Mode]] = {}
@@ -161,6 +162,7 @@ __all__ = [
     "H3",
     "KREA2",
     "MUSIC3",
+    "SDTAGS",
     "Mode",
     "Target",
     "TargetError",
@@ -175,6 +177,7 @@ __all__ = [
     "mode_spec",
     "profile_for_mode",
     "profiles",
+    "restore_locked_tokens",
     "shared_checks",
     "strip_fence",
     "system_prompt_for",

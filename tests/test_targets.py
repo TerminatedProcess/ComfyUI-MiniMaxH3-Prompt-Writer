@@ -69,7 +69,7 @@ class RegistryTests(unittest.TestCase):
 
     def test_catalog_is_json_shaped_for_the_studio(self):
         catalog = targets.catalog()
-        self.assertEqual({item["id"] for item in catalog}, {"h3", "krea2", "anima", "music3"})
+        self.assertEqual({item["id"] for item in catalog}, {"h3", "krea2", "anima", "sdtags", "music3"})
         krea = next(item for item in catalog if item["id"] == "krea2")
         self.assertEqual(krea["workspace"], "image")
         self.assertEqual(krea["output_shape"], "prose")

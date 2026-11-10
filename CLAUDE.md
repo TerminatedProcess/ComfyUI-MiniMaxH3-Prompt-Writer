@@ -72,7 +72,10 @@ lives in `backend/generic.py`.
 ### Targets
 
 `backend/targets/` is the registry: one owner per mode, one place the UI reads.
-`h3.py`, `krea2.py`, `anima.py` plus `base.py`. Adding a model is a spec module
+`h3.py`, `krea2.py`, `anima.py`, `sdtags.py` (SDXL / Illustrious / Pony / SD 1.5 as
+variants of one tag target) plus `base.py`. `external_map.py` is the only place
+another app's model base (InvokeAI ids) becomes a mode + variant; unmapped bases
+are `UNSUPPORTED_TARGET`, never guessed. Adding a model is a spec module
 and a vendored guide — **not** a new branch in the pipeline, the route handlers
 or the studio markup. Six duplicate mode lists is how "Krea 2 works but its
 Settings card is missing" happens.
@@ -100,6 +103,21 @@ passes left five facts missing.
 `STATE_LOCK`. Generation and media mutation are mutually exclusive — a busy
 writer returns `GENERATION_BUSY` (409). Media lives in a per-session store
 (`backend/media.py`, `STORE`) under ComfyUI's temp directory, wiped on import.
+
+### Handoff from other apps, and the fleet gate
+
+`external_routes.py` lets another local app (the Media Generator) create a
+session (`POST /h3studio/external/session`), open it at
+`/?session=<id>&autostart=1`, and poll for the result. Creating a session runs
+no model; the studio tab does the build + compile, once (`autostarted` flag).
+Caller-locked tokens live in `session.external` and are restored verbatim after
+every draft by `targets.base.restore_locked_tokens`, never left to repair.
+
+`fleet_gate.py` sits in `_prepare_generation_runtime` for local families. It is
+a no-op unless `H3_FLEET_GATE=1` (set only in this machine's systemd unit;
+inside ComfyUI it would wait on its own queue). It waits on the ComfyUI/InvokeAI
+queues, then applies the `H3_FLEET_PRESET` Service Dashboard preset. It never
+cancels another app's job.
 
 ### Provider backends (`backend/models/`)
 

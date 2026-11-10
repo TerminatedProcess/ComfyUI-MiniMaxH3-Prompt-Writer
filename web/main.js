@@ -8,6 +8,8 @@ import { createWriterStage } from "./writer_stage.js";
 import { createMediaZoom } from "./media_zoom.js";
 import { generateSequence, cancelSequence } from "./api/sequence.js";
 import { app } from "/scripts/app.js";
+import { api } from "/scripts/api.js";
+import { bannerMarkup as gateBannerMarkup, createHandoff, takeAutostart } from "./handoff.js";
 import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getMediaManifest, getModels, getOllamaStatus, getStatus, getSystemPrompt, orderMediaSubjects, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, setMediaSubject, unloadModel, uploadMedia } from "./api/h3studio.js";
 import { comfyVramIsAlreadyEmpty, createSessionId, fileCountFromDataTransfer, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replacementTargetForFileDrop, replaceEventListener, vramReleaseReachedTarget } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
@@ -27,6 +29,7 @@ import {
   loadOllamaModel,
   loadOllamaHost,
   loadSessionId,
+  sessionIdFromUrl,
   loadUserPreferences,
   normalizeOllamaHost,
   saveApiProviderConfig,
@@ -303,6 +306,7 @@ async function syncSystemPromptEditor(profile) {
     reference: "Reference",
     krea2: "Krea2",
     anima: "Anima",
+    sdtags: "SDTags",
   }[profile] || "T2VA";
   textarea.disabled = true;
   if (!studio.systemPromptDefaults[profile]) {
@@ -341,6 +345,7 @@ function syncSystemPromptEditors() {
     syncSystemPromptEditor("reference"),
     syncSystemPromptEditor("krea2"),
     syncSystemPromptEditor("anima"),
+    syncSystemPromptEditor("sdtags"),
     syncSystemPromptEditor("music3"),
     syncSystemPromptEditor("music3_lyrics"),
   ]);
@@ -348,7 +353,7 @@ function syncSystemPromptEditors() {
 
 function setSystemPromptProfile(profile) {
   if (!studio) return;
-  studio.settingsPromptProfile = ["reference", "krea2", "anima"].includes(profile) ? profile : "standard";
+  studio.settingsPromptProfile = ["reference", "krea2", "anima", "sdtags"].includes(profile) ? profile : "standard";
   studio.root.querySelectorAll("[data-system-prompt-profile]").forEach((button) => {
     const selected = button.dataset.systemPromptProfile === studio.settingsPromptProfile;
     button.classList.toggle("is-selected", selected);
@@ -3899,10 +3904,11 @@ function createStudio() {
       <div class="h3ps-other-models-catalog" data-other-models-catalog></div>
     </section>
 
+    ${gateBannerMarkup()}
     <div class="h3ps-toast" role="status" aria-live="polite" aria-atomic="true" data-h3ps-toast><span class="h3ps-toast-icon">${icon("info", 17)}</span><span><strong data-toast-title>Notice</strong><span data-toast-message></span><button type="button" class="h3ps-toast-action" data-toast-action hidden></button><details data-toast-details hidden><summary>Technical details</summary><pre></pre></details></span></div>`;
   document.body.appendChild(root);
 
-  studio = { root, ...createStudioState({ sessionId: loadSessionId(localStorage, createSessionId), storage: localStorage }) };
+  studio = { root, ...createStudioState({ sessionId: sessionIdFromUrl(location.search, localStorage) || loadSessionId(localStorage, createSessionId), storage: localStorage }) };
   root.querySelector("[data-comfy-memory-action]").hidden = !HOST_CAPABILITIES.comfyMemory;
   if (!HOST_CAPABILITIES.windowed) {
     studio.fullscreen = true;
@@ -4600,13 +4606,29 @@ function createStudio() {
   setMusicSystemPromptProfile(studio.musicSystemPromptProfile);
   refreshModels();
   restoreSessionMedia();
-  studio.stage.start().catch((error) => {
+  const autostart = takeAutostart();
+  studio.handoff = createHandoff({
+    root,
+    fetchApi: (...args) => api.fetchApi(...args),
+    isBusy: () => Boolean(studio?.requestBusy || studio?.stage?.busy?.()),
+    onError: (title, message) => showToast(title, message),
+  });
+  const stageReady = studio.stage.start().catch((error) => {
     // The stage is the whole two-pane flow; if it cannot load, say so rather
     // than leaving the panes half-rendered and silent.
     studio.stage = null;
     syncWorkspace();
     showToast("Writer stage unavailable", error.message || String(error));
   });
+  // A registry means the stage came up; a failed start resolves undefined.
+  stageReady.then((registry) => registry && autostart && studio.handoff.autostart({
+    sessionId: studio.sessionId,
+    session: studio.stage?.session(),
+    refreshModels,
+    build: () => studio.stage.build(),
+    compile: startGenerationPreview,
+    hasModel: () => Boolean(studio.selectedModel?.runtime_ready),
+  })).catch((error) => showToast("Handoff failed", error.message || String(error)));
   return studio;
 }
 

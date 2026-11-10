@@ -231,27 +231,40 @@ GUIDE_MESSAGE_NAMES = {
     "krea2": "official_krea2_prompting_guide",
     "krea2_expansion": "official_krea2_expansion_instructions",
     "anima": "official_anima_prompting_rules",
+    "illustrious": "official_illustrious_prompting_rules",
+    "pony": "official_pony_prompting_rules",
 }
 
 
 def _guide_content(guide_id: str) -> str:
     """The text of one guide, excerpted where the whole file would be waste."""
-    from .guides import anima_prompting_excerpt, krea2_examples_excerpt
+    from .guides import (
+        anima_prompting_excerpt,
+        illustrious_prompting_excerpt,
+        krea2_examples_excerpt,
+        pony_prompting_excerpt,
+    )
 
     if guide_id == "krea2":
         return krea2_examples_excerpt()
     if guide_id == "anima":
         return anima_prompting_excerpt()
+    if guide_id == "illustrious":
+        return illustrious_prompting_excerpt()
+    if guide_id == "pony":
+        return pony_prompting_excerpt()
     return load_guide(guide_id)["content"]
 
 
-def _guide_messages(mode: str, system_prompt: str) -> list[dict[str, str]]:
+def _guide_messages(mode: str, system_prompt: str, variant: str | None = None) -> list[dict[str, str]]:
     if mode == MUSIC3_MODE:
         return ([{"role": "system", "name": "music3_caption_contract", "content": system_prompt}] if system_prompt else [])
     messages = []
     if system_prompt:
         messages.append({"role": "system", "name": "prompt_studio_system_prompt", "content": system_prompt})
-    for guide_id in mode_spec(mode).guide_ids:
+    target = _target(mode)
+    guide_ids = target.guides_for_variant(variant) if target.guides_for_variant else mode_spec(mode).guide_ids
+    for guide_id in guide_ids:
         messages.append({
             "role": "system",
             "name": GUIDE_MESSAGE_NAMES.get(guide_id, f"official_{guide_id}_guide"),
@@ -347,6 +360,33 @@ def _session_manifest(body: dict[str, Any], mode: str, session_id: str) -> dict[
     return STORE.manifest(session_id, mode)
 
 
+def _handoff(session_id: str) -> tuple[list[str], str]:
+    """Locked tokens and the source negative a caller handed this session.
+
+    Only sessions created through `/external/session` carry these; for every
+    other session this is ([], ""). Read from the session file rather than the
+    request body because the studio never sees them -- they belong to the
+    caller, and must survive whatever the user does in the conversation.
+    """
+    from . import session_store
+
+    try:
+        external = session_store.load(session_id).get("external") or {}
+    except session_store.SessionStoreError:
+        return [], ""
+    tokens = [str(token) for token in external.get("locked_tokens") or [] if str(token).strip()]
+    return tokens, str(external.get("negative") or "")
+
+
+def _handoff_block(tokens: list[str], negative: str) -> str:
+    block = ""
+    if tokens:
+        block += "Keep these tokens exactly as written (LoRA tags, embeddings, trigger words): " + ", ".join(tokens) + "\n\n"
+    if negative:
+        block += f"Source negative prompt (keep its intent in the Negative line):\n{negative}\n\n"
+    return block
+
+
 def _image_request(body: dict[str, Any], mode: str, flags: dict[str, Any]) -> dict[str, Any]:
     """Krea 2 and Anima: a still, compiled from the generic prompt or a brief.
 
@@ -377,6 +417,7 @@ def _image_request(body: dict[str, Any], mode: str, flags: dict[str, Any]) -> di
     if not manifest["valid"]:
         raise AssemblyError("INVALID_MEDIA_MANIFEST", "The media manifest is not valid.", manifest["violations"])
     references = "\n".join(_media_line(asset) for asset in manifest["assets"]) or "None"
+    locked_tokens, source_negative = _handoff(session_id)
     generic_block = f"Generic prompt:\n{generic_prompt.render(doc)}\n\n" if doc is not None else ""
     brief_block = f"Creative brief:\n{brief}\n\n" if brief else ""
     variant_line = f"Variant: {flags['variant']}\n" if flags.get("variant") else ""
@@ -390,6 +431,7 @@ def _image_request(body: dict[str, Any], mode: str, flags: dict[str, Any]) -> di
         f"{_goal_block(goals)}"
         f"{generic_block}"
         f"{brief_block}"
+        f"{_handoff_block(locked_tokens, source_negative)}"
         + target.final_contract(mode, brief, story=bool(flags.get("story")))
     )
     return {
@@ -407,6 +449,7 @@ def _image_request(body: dict[str, Any], mode: str, flags: dict[str, Any]) -> di
             # user needs to hear that rather than wonder why their picture had
             # no effect.
             "media_warnings": [item["message"] for item in manifest.get("warnings", [])],
+            "locked_tokens": locked_tokens,
             **flags,
         },
         "media_inputs": _media_inputs(manifest["assets"]),
@@ -415,7 +458,7 @@ def _image_request(body: dict[str, Any], mode: str, flags: dict[str, Any]) -> di
             for guide_id in mode_spec(mode).guide_ids[1:]
         ],
         "system_prompt": {"custom": system_prompt_custom, "content": system_prompt},
-        "messages": _guide_messages(mode, system_prompt) + [{"role": "user", "content": user_content}],
+        "messages": _guide_messages(mode, system_prompt, flags.get("variant")) + [{"role": "user", "content": user_content}],
     }
 
 
@@ -560,6 +603,7 @@ def _image_refinement(body: dict[str, Any], mode: str, flags: dict[str, Any]) ->
     goals = _validated_goals(body)
     brief = normalize_unicode_text(str(body.get("creative_brief") or "")).strip()
     manifest = _session_manifest(body, mode, session_id)
+    locked_tokens, source_negative = _handoff(session_id)
     variant_line = f"Variant: {flags['variant']}\n" if flags.get("variant") else ""
     user_content = (
         f"Revise the current {target.label} prompt according to the revision instruction. "
@@ -571,6 +615,7 @@ def _image_refinement(body: dict[str, Any], mode: str, flags: dict[str, Any]) ->
         + (f"Original brief:\n{brief}\n\n" if brief else "")
         + f"Current prompt:\n{current_prompt}\n\n"
         f"Revision instruction:\n{instruction}\n\n"
+        f"{_handoff_block(locked_tokens, source_negative)}"
         + target.final_contract(mode, instruction, story=bool(flags.get("story")))
     )
     return {
@@ -586,6 +631,7 @@ def _image_refinement(body: dict[str, Any], mode: str, flags: dict[str, Any]) ->
             "media_manifest": manifest,
             "generic": doc,
             "goals": goals,
+            "locked_tokens": locked_tokens,
             **flags,
         },
         "media_inputs": [],
@@ -594,7 +640,7 @@ def _image_refinement(body: dict[str, Any], mode: str, flags: dict[str, Any]) ->
             for guide_id in mode_spec(mode).guide_ids[1:]
         ],
         "system_prompt": {"custom": system_prompt_custom, "content": system_prompt},
-        "messages": _guide_messages(mode, system_prompt) + [{"role": "user", "content": user_content}],
+        "messages": _guide_messages(mode, system_prompt, flags.get("variant")) + [{"role": "user", "content": user_content}],
     }
 
 

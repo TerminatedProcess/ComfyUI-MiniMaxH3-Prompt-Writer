@@ -14,7 +14,7 @@ from .context import (
 from . import fact_insertion, generic, goals as goal_ledger, prompt_audit
 from .media import STORE, MediaError
 from .models.contract import ModelError, final_message_text
-from .targets import TargetError, mode_limits, target_for_mode
+from .targets import TargetError, mode_limits, restore_locked_tokens, target_for_mode
 
 def _asset_data_uri(session_id: str, asset_id: str, representation: str) -> str:
     try:
@@ -308,7 +308,7 @@ def run_h3_pipeline(
     if not text.strip():
         raise ModelError("EMPTY_GENERATION", "The model did not produce a final prompt.")
 
-    prompt = text
+    prompt = restore_locked_tokens(assembled, text)
     reasoning_tokens = count_text_tokens(reasoning_content) if reasoning_content else 0
     if single_call:
         seconds = time.perf_counter() - generation_started
@@ -511,6 +511,7 @@ def run_h3_pipeline(
         if repair_finish_reason == "length":
             format_repair_failure = "repair reached its output limit"
             continue
+        repaired = restore_locked_tokens(assembled, repaired)
         accepted, repaired_audit, failure = target.accept_repair(assembled, prompt, repaired, repair_plan)
         if not accepted:
             format_repair_failure = failure

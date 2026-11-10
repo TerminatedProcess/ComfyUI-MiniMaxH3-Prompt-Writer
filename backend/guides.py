@@ -14,6 +14,16 @@ KREA2_REVISION = "db3984fbc6e13b34c0064990fc2d95ac64d00058"
 KREA2_SOURCE_ROOT = f"https://github.com/krea-ai/krea-2/blob/{KREA2_REVISION}/docs"
 ANIMA_REVISION = "f973fc41ec7545364ac9776c2440285f43ff2a30"
 ANIMA_SOURCE_ROOT = f"https://huggingface.co/circlestone-labs/Anima/blob/{ANIMA_REVISION}"
+ILLUSTRIOUS_REVISION = "dca0dac303e6dc4b0c31d8001bc685b89b5d0204"
+ILLUSTRIOUS_SOURCE_ROOT = (
+    f"https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0/blob/{ILLUSTRIOUS_REVISION}"
+)
+# Pony Diffusion V6 XL publishes its prompting rules only in the CivitAI model
+# description; its Hugging Face repo README is empty. CivitAI has no content
+# revisions, so the pin is the model-version id plus the SHA-256 below, and the
+# file is the `description` field of /api/v1/models/257749 as fetched 2026-11-10.
+PONY_REVISION = "civitai-model-257749-version-290640"
+PONY_SOURCE_ROOT = "https://civitai.com/api/v1/models"
 
 
 @dataclass(frozen=True)
@@ -77,6 +87,26 @@ GUIDES = {
         source_revision=ANIMA_REVISION,
         source_basename="README.md",
         vendor="CircleStone Labs",
+    ),
+    "illustrious": GuideSpec(
+        id="illustrious",
+        title="Illustrious XL Model Card",
+        filename="ILLUSTRIOUS_XL_MODEL_CARD_en.md",
+        source_sha256="0b4a69d83c4a3138cbb15bc6a29fc52609e94f06a1269fa66d2e16c5f1c3aaef",
+        source_root=ILLUSTRIOUS_SOURCE_ROOT,
+        source_revision=ILLUSTRIOUS_REVISION,
+        source_basename="README.md",
+        vendor="OnomaAI Research",
+    ),
+    "pony": GuideSpec(
+        id="pony",
+        title="Pony Diffusion V6 XL Model Description",
+        filename="PONY_V6_XL_DESCRIPTION_en.html",
+        source_sha256="1624df08093f5e93dbdf5ea42ddfeca1696ce8aabbdd16f0bc0bd145b7d1b7b0",
+        source_root=PONY_SOURCE_ROOT,
+        source_revision=PONY_REVISION,
+        source_basename="257749",
+        vendor="PurpleSmartAI",
     ),
 }
 MODE_GUIDES = {
@@ -191,6 +221,44 @@ def anima_prompting_excerpt() -> str:
     if missing:
         raise RuntimeError(f"Could not extract {missing} from the official Anima model card.")
     return "\n\n".join(sections[name] for name in wanted) + "\n"
+
+
+def _html_text(fragment: str) -> str:
+    import html
+
+    text = re.sub(r"<br\s*/?>|</p>|</li>", "\n", fragment)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text))
+    return re.sub(r"\n\s*\n+", "\n\n", re.sub(r"[ \t]+", " ", text)).strip()
+
+
+@lru_cache(maxsize=1)
+def illustrious_prompting_excerpt() -> str:
+    """The card's Usage paragraph and its two worked prompt pairs, as text.
+
+    The rest of the card is licence terms, safety policy and release notes, in
+    HTML -- none of it helps write a tag list.
+    """
+    content = load_guide("illustrious")["content"]
+    start = content.find("<strong>Usage:</strong>")
+    end = content.find("</div>", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not extract the Usage section from the official Illustrious XL model card.")
+    return "# Illustrious XL usage (official model card)\n\n" + _html_text(content[start:end]) + "\n"
+
+
+@lru_cache(maxsize=1)
+def pony_prompting_excerpt() -> str:
+    """From "Important information" up to the credits, as text.
+
+    That span holds the score_ template, the source_/rating_ tags and the
+    clip-skip warning; the credits and training notes after it do not.
+    """
+    content = _html_text(load_guide("pony")["content"])
+    start = content.find("Important information")
+    end = content.find("Special thanks", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not extract the prompting rules from the official Pony Diffusion V6 description.")
+    return "# Pony Diffusion V6 XL prompting (official model description)\n\n" + content[start:end].strip() + "\n"
 
 
 def guide_catalog() -> list[dict[str, str | list[str]]]:

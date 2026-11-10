@@ -13,6 +13,8 @@ is told.
 | `KREA2_PROMPTING_GUIDE_en.md` | `krea-ai/krea-2` (GitHub) `docs/prompting.md`, Apache-2.0 | `db3984f` | Krea 2 |
 | `KREA2_PROMPT_EXPANSION_en.txt` | `krea-ai/krea-2` `docs/expansion.txt`, Apache-2.0 | `db3984f` | Krea 2 |
 | `ANIMA_MODEL_CARD_en.md` | `circlestone-labs/Anima` (Hugging Face) `README.md` | `f973fc4` | Anima |
+| `ILLUSTRIOUS_XL_MODEL_CARD_en.md` | `OnomaAIResearch/Illustrious-xl-early-release-v0` (Hugging Face) `README.md` | `dca0dac` | SD tags |
+| `PONY_V6_XL_DESCRIPTION_en.html` | CivitAI model 257749 `description` (API), version 290640; fetched 2026-11-10 — CivitAI has no revisions, so the hash is the pin | — | SD tags |
 
 Two of them are excerpted before being sent to the model, because the whole file
 would spend context on material that cannot help write a prompt: Krea's sample

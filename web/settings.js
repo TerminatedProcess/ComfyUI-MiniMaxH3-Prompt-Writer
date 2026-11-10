@@ -127,12 +127,17 @@ export function settingsMarkup(icon) {
               <span><strong>Anima</strong><small>Anima tag prompts</small></span>
               <span><em data-system-prompt-summary-status="anima">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
             </button>
+            <button type="button" data-system-prompt-profile="sdtags">
+              <span><strong>SD tags</strong><small>SDXL · Illustrious · Pony · SD 1.5</small></span>
+              <span><em data-system-prompt-summary-status="sdtags">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+            </button>
           </div>
           <div class="h3ps-system-prompt-editor" data-system-prompt-editor hidden>
             ${systemPromptPanel("standard", "Standard", "Instructions used by T2VA, I2VA, FL2VA and L2VA.", icon)}
             ${systemPromptPanel("reference", "Reference", "Instructions used by Reference mode.", icon, true)}
             ${systemPromptPanel("krea2", "Krea 2", "Instructions used for Krea 2 prompts. The default shown reflects your Naughty and Story builder settings; an edit here replaces it entirely and the flags stop changing it.", icon, true)}
             ${systemPromptPanel("anima", "Anima", "Instructions used for Anima prompts. The default shown reflects your Naughty, Story builder and variant settings; an edit here replaces it entirely and those stop changing it.", icon, true)}
+            ${systemPromptPanel("sdtags", "SD tags", "Instructions used for SDXL, Illustrious, Pony and SD 1.5 tag prompts. The default shown reflects your Naughty, Story builder and variant settings; an edit here replaces it entirely and those stop changing it.", icon, true)}
           </div>
           <div class="h3ps-draft-defaults-action" data-draft-defaults-action>
             <button type="button" data-restore-default-drafts>${icon("refresh", 13)}<span data-restore-default-drafts-label>Restore default drafts</span></button>

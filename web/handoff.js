@@ -10,6 +10,28 @@
 
 const PREFIX = "/h3studio";
 const POLL_MS = 2000;
+const RETRY_BASE_MS = 3000;
+const ENGINE_ATTEMPTS = 5;
+const COMPILE_ATTEMPTS = 2;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** LLM-Redirect answers 503 engine_not_set while the engine is still coming up:
+ *  a documented, transient state that callers are meant to retry. */
+export function isEngineNotReady(error) {
+  return /engine_not_set|engine not set/i.test(`${error?.code || ""} ${error?.message || ""} ${JSON.stringify(error?.details || "")}`);
+}
+
+async function retrying(work, attempts = ENGINE_ATTEMPTS, delay = RETRY_BASE_MS) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await work();
+    } catch (error) {
+      if (!isEngineNotReady(error) || attempt + 1 >= attempts) throw error;
+      await sleep(delay * 2 ** attempt);
+    }
+  }
+}
 
 async function call(fetchApi, path, body) {
   const response = await fetchApi(`${PREFIX}${path}`, body === undefined ? undefined : {
@@ -50,7 +72,7 @@ export function bannerMarkup() {
   </div>`;
 }
 
-export function createHandoff({ root, fetchApi, isBusy, onError }) {
+export function createHandoff({ root, fetchApi, isBusy, onError, retryDelayMs = RETRY_BASE_MS }) {
   const banner = root.querySelector("[data-gate-banner]");
   let acquiring = false;
   let timer = null;
@@ -108,7 +130,7 @@ export function createHandoff({ root, fetchApi, isBusy, onError }) {
       // then is a fallback -- connect the engine the preset just brought up.
       if (gate?.llm_url) {
         try {
-          await connectLlm(gate.llm_url);
+          await retrying(() => connectLlm(gate.llm_url), ENGINE_ATTEMPTS, retryDelayMs);
         } catch (error) {
           return fail("Could not connect the local LLM", `${gate.llm_url}: ${error.message || error}`);
         }
@@ -118,12 +140,19 @@ export function createHandoff({ root, fetchApi, isBusy, onError }) {
       if (session.target?.mode) selectMode(session.target.mode);
       if (!hasModel()) return fail("No prompt model selected", "Choose a model, then press Build and Generate.");
       try {
-        await build();
-        await compile();
+        await retrying(build, ENGINE_ATTEMPTS, retryDelayMs);
       } catch (error) {
-        return fail("Handoff failed", error.message || String(error));
+        return fail("Build failed", error.message || String(error));
       }
-      return true;
+      // Compile reports its own errors as a toast and resolves either way, so
+      // success is read from the server: a stored prompt for the target.
+      for (let attempt = 0; attempt < COMPILE_ATTEMPTS; attempt += 1) {
+        if (attempt) await sleep(retryDelayMs * 2 ** attempt);
+        await compile();
+        const status = await call(fetchApi, `/external/session/${encodeURIComponent(sessionId)}`).catch(() => null);
+        if (status?.result?.prompt) return true;
+      }
+      return fail("Compile failed", "The writer did not produce a prompt; the error is shown in the writer tab.");
     },
   };
 }

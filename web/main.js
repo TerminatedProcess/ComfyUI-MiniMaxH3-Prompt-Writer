@@ -4650,7 +4650,7 @@ function createStudio() {
       renderMedia(studio.mode);
       studio.stage?.render();
     },
-    build: () => studio.stage.build(),
+    build: () => studio.stage.build({ rethrow: true }),
     compile: startGenerationPreview,
     hasModel: () => Boolean(studio.selectedModel?.runtime_ready),
   })).catch((error) => showToast("Handoff failed", error.message || String(error)));

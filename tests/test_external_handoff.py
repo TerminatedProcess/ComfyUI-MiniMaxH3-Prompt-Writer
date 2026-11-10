@@ -391,6 +391,11 @@ class FleetGateTests(unittest.TestCase):
             asyncio.run(self.gate.acquire("s", lambda: False))
         self.assertEqual(self.gate.phase, "idle")
 
+    def test_readiness_is_checked_through_the_redirect_the_studio_uses(self):
+        # :8890 healthy is not enough: Caddy keeps answering engine_not_set on
+        # :8892 for fail_duration after an earlier probe found the engine down.
+        self.assertEqual(fleet_gate.LLM_HEALTH, f"{fleet_gate.LLM_URL}/health")
+
     def test_describe_counts(self):
         self.assertEqual(fleet_gate.describe({"invokeai": 3, "comfyui": 1}), "InvokeAI has 3 jobs, ComfyUI has 1 job")
 

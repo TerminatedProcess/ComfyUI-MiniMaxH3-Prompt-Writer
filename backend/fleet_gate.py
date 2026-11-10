@@ -37,11 +37,15 @@ PRESET = os.environ.get("H3_FLEET_PRESET", "Prompt Writer + Generator")
 COMFY_QUEUE = os.environ.get("H3_FLEET_COMFY_QUEUE", "http://127.0.0.1:8188/queue")
 INVOKE_QUEUE = os.environ.get("H3_FLEET_INVOKE_QUEUE", "http://127.0.0.1:9090/api/v1/queue/default/status")
 DASHBOARD = os.environ.get("H3_FLEET_DASHBOARD", "http://127.0.0.1:8090")
-LLM_HEALTH = os.environ.get("H3_FLEET_LLM_HEALTH", "http://127.0.0.1:8890/health")
 # What the studio should connect to once the preset is up: LLM-Redirect, which
 # fronts whichever local engine the preset started. A handed-over session's tab
 # was opened before that engine existed, so it cannot have connected on its own.
 LLM_URL = os.environ.get("H3_FLEET_LLM_URL", "http://127.0.0.1:8892")
+# Readiness is checked THROUGH the redirect, not on the engine's own port.
+# Measured: the gate saw llama.cpp :8890 healthy, the studio's next call to
+# :8892 still got 503 engine_not_set -- Caddy's `fail_duration 10s` remembers
+# that the engine was down when the tab probed it at load, for ten more seconds.
+LLM_HEALTH = os.environ.get("H3_FLEET_LLM_HEALTH", f"{LLM_URL}/health")
 POLL_SECONDS = 5.0
 LLM_READY_TIMEOUT = 180.0
 PROBE_TIMEOUT = aiohttp.ClientTimeout(total=3)

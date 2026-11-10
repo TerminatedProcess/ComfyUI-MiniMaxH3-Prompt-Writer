@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bannerText, createHandoff, takeAutostart } from "../web/handoff.js";
+import { bannerText, createHandoff, isEngineNotReady, takeAutostart } from "../web/handoff.js";
 import { sessionIdFromUrl } from "../web/studio_state.js";
 
 const ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
@@ -51,9 +51,11 @@ test("autostart connects the preset's LLM after the gate, then restores the call
     fetchApi: fakeFetch({
       [`/external/session/${ID}/autostarted`]: () => [200, { first: true }],
       "/fleet-gate/acquire": () => { calls.push("acquire"); return [200, { llm_url: "http://127.0.0.1:8892" }]; },
+      [`/external/session/${ID}`]: () => [200, { result: { prompt: "a prompt" } }],
     }),
     isBusy: () => false,
     onError: (title) => calls.push(`error:${title}`),
+    retryDelayMs: 1,
   });
   try {
     const ok = await handoff.autostart({
@@ -84,6 +86,7 @@ test("a failed LLM connect stops the handoff and reports it to the caller", asyn
     }),
     isBusy: () => false,
     onError: () => {},
+    retryDelayMs: 1,
   });
   try {
     let built = false;
@@ -101,6 +104,82 @@ test("a failed LLM connect stops the handoff and reports it to the caller", asyn
     assert.equal(ok, false);
     assert.equal(built, false);
     assert.match(reported[0], /Could not connect the local LLM/);
+  } finally {
+    handoff.stop();
+  }
+});
+
+function engineHandoff(extraRoutes, reported) {
+  return createHandoff({
+    root: fakeRoot(),
+    fetchApi: fakeFetch({
+      [`/external/session/${ID}/autostarted`]: () => [200, { first: true }],
+      "/fleet-gate/acquire": () => [200, { llm_url: "http://127.0.0.1:8892" }],
+      [`/external/session/${ID}/error`]: (options) => { reported.push(JSON.parse(options.body).message); return [200, {}]; },
+      ...extraRoutes,
+    }),
+    isBusy: () => false,
+    onError: () => {},
+    retryDelayMs: 1,
+  });
+}
+
+const notReady = () => Object.assign(new Error("LLM Engine not set - apply the llama.cpp or Strata preset"), { code: "EXTERNAL_SERVER_ERROR" });
+
+test("engine_not_set while the engine loads is retried, not fatal", async () => {
+  assert.equal(isEngineNotReady(notReady()), true);
+  assert.equal(isEngineNotReady(new Error("model failed")), false);
+  const reported = [];
+  const handoff = engineHandoff({ [`/external/session/${ID}`]: () => [200, { result: { prompt: "p" } }] }, reported);
+  try {
+    let builds = 0;
+    const ok = await handoff.autostart({
+      sessionId: ID, session: { external: {}, target: { mode: "Krea2" } },
+      refreshModels: async () => {}, connectLlm: async () => {}, selectMode: () => {}, hasModel: () => true,
+      build: async () => { builds += 1; if (builds < 3) throw notReady(); },
+      compile: async () => {},
+    });
+    assert.equal(ok, true);
+    assert.equal(builds, 3);
+    assert.deepEqual(reported, []);
+  } finally {
+    handoff.stop();
+  }
+});
+
+test("a compile that leaves no prompt is reported as an error, not left idle", async () => {
+  const reported = [];
+  const handoff = engineHandoff({ [`/external/session/${ID}`]: () => [200, { status: "idle", result: null }] }, reported);
+  try {
+    let compiles = 0;
+    const ok = await handoff.autostart({
+      sessionId: ID, session: { external: {}, target: { mode: "Krea2" } },
+      refreshModels: async () => {}, connectLlm: async () => {}, selectMode: () => {}, hasModel: () => true,
+      build: async () => {}, compile: async () => { compiles += 1; },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(ok, false);
+    assert.equal(compiles, 2);
+    assert.match(reported[0], /Compile failed/);
+  } finally {
+    handoff.stop();
+  }
+});
+
+test("a build that keeps failing for a real reason stops at once and is reported", async () => {
+  const reported = [];
+  const handoff = engineHandoff({}, reported);
+  try {
+    let builds = 0;
+    const ok = await handoff.autostart({
+      sessionId: ID, session: { external: {}, target: { mode: "Krea2" } },
+      refreshModels: async () => {}, connectLlm: async () => {}, selectMode: () => {}, hasModel: () => true,
+      build: async () => { builds += 1; throw new Error("THINKING_TRUNCATED"); }, compile: async () => {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(ok, false);
+    assert.equal(builds, 1);
+    assert.match(reported[0], /Build failed: THINKING_TRUNCATED/);
   } finally {
     handoff.stop();
   }

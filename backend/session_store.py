@@ -73,9 +73,6 @@ def new_state(session_id: str) -> dict[str, Any]:
         "outputs": {},
         "target": {"mode": None, "variant": None},
         "media_snapshot": [],
-        # Set only when another app hands a prompt over (`/external/session`):
-        # who sent it, the base it targets, and what must survive verbatim.
-        "external": None,
     }
 
 
@@ -129,19 +126,6 @@ def _normalized(raw: Any, session_id: str) -> dict[str, Any]:
     snapshot = raw.get("media_snapshot")
     if isinstance(snapshot, list):
         state["media_snapshot"] = [item for item in snapshot if isinstance(item, dict)]
-    external = raw.get("external")
-    if isinstance(external, dict):
-        state["external"] = {
-            "source": str(external.get("source") or "")[:64],
-            "base": str(external.get("base") or "")[:64],
-            "family": str(external.get("family") or "")[:64],
-            "negative": str(external.get("negative") or "")[:8000],
-            "locked_tokens": [str(token)[:200] for token in (external.get("locked_tokens") or [])][:64],
-            "autostarted": bool(external.get("autostarted")),
-            "error": str(external.get("error") or "")[:500] or None,
-            "error_at": external.get("error_at"),
-            "created_at": external.get("created_at"),
-        }
     state["updated_at"] = raw.get("updated_at")
     return state
 
@@ -163,7 +147,7 @@ def is_empty(state: dict[str, Any]) -> bool:
 
     if not generic_doc.is_empty(state.get("generic") or {}):
         return False
-    if state.get("goals") or state.get("conversation") or state.get("outputs") or state.get("external"):
+    if state.get("goals") or state.get("conversation") or state.get("outputs"):
         return False
     inputs = state.get("inputs") or {}
     defaults = new_state(state.get("session_id") or str(UUID(int=0)))["inputs"]

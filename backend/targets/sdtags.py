@@ -16,9 +16,9 @@ Written from the vendored Illustrious XL model card and the Pony Diffusion V6
 model description. Plain SDXL and SD 1.5 publish no prompting guide; their
 clauses below are this writer's own contract, not passed off as official.
 
-LoRA trigger words, `<lora:...>` and embedding tokens a caller hands over are
-restored verbatim after every draft by `base.restore_locked_tokens`, so they
-never depend on the model copying them.
+LoRA trigger words, `<lora:...>` and embedding tokens in the brief are to be
+copied verbatim; the contract says so, because one changed character and the
+LoRA silently stops firing.
 """
 from __future__ import annotations
 

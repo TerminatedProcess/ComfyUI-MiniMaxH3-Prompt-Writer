@@ -358,33 +358,6 @@ def _session_manifest(body: dict[str, Any], mode: str, session_id: str) -> dict[
     return STORE.manifest(session_id, mode)
 
 
-def _handoff(session_id: str) -> tuple[list[str], str]:
-    """Locked tokens and the source negative a caller handed this session.
-
-    Only sessions created through `/external/session` carry these; for every
-    other session this is ([], ""). Read from the session file rather than the
-    request body because the studio never sees them -- they belong to the
-    caller, and must survive whatever the user does in the conversation.
-    """
-    from . import session_store
-
-    try:
-        external = session_store.load(session_id).get("external") or {}
-    except session_store.SessionStoreError:
-        return [], ""
-    tokens = [str(token) for token in external.get("locked_tokens") or [] if str(token).strip()]
-    return tokens, str(external.get("negative") or "")
-
-
-def _handoff_block(tokens: list[str], negative: str) -> str:
-    block = ""
-    if tokens:
-        block += "Keep these tokens exactly as written (LoRA tags, embeddings, trigger words): " + ", ".join(tokens) + "\n\n"
-    if negative:
-        block += f"Source negative prompt (keep its intent in the Negative line):\n{negative}\n\n"
-    return block
-
-
 def _image_request(body: dict[str, Any], mode: str, flags: dict[str, Any]) -> dict[str, Any]:
     """Krea 2 and Anima: a still, compiled from the generic prompt or a brief.
 
@@ -415,7 +388,6 @@ def _image_request(body: dict[str, Any], mode: str, flags: dict[str, Any]) -> di
     if not manifest["valid"]:
         raise AssemblyError("INVALID_MEDIA_MANIFEST", "The media manifest is not valid.", manifest["violations"])
     references = "\n".join(_media_line(asset) for asset in manifest["assets"]) or "None"
-    locked_tokens, source_negative = _handoff(session_id)
     generic_block = f"Generic prompt:\n{generic_prompt.render(doc)}\n\n" if doc is not None else ""
     brief_block = f"Creative brief:\n{brief}\n\n" if brief else ""
     variant_line = f"Variant: {flags['variant']}\n" if flags.get("variant") else ""
@@ -429,7 +401,6 @@ def _image_request(body: dict[str, Any], mode: str, flags: dict[str, Any]) -> di
         f"{_goal_block(goals)}"
         f"{generic_block}"
         f"{brief_block}"
-        f"{_handoff_block(locked_tokens, source_negative)}"
         + target.final_contract(mode, brief, story=bool(flags.get("story")))
     )
     return {
@@ -447,7 +418,6 @@ def _image_request(body: dict[str, Any], mode: str, flags: dict[str, Any]) -> di
             # user needs to hear that rather than wonder why their picture had
             # no effect.
             "media_warnings": [item["message"] for item in manifest.get("warnings", [])],
-            "locked_tokens": locked_tokens,
             **flags,
         },
         "media_inputs": _media_inputs(manifest["assets"]),
@@ -601,7 +571,6 @@ def _image_refinement(body: dict[str, Any], mode: str, flags: dict[str, Any]) ->
     goals = _validated_goals(body)
     brief = normalize_unicode_text(str(body.get("creative_brief") or "")).strip()
     manifest = _session_manifest(body, mode, session_id)
-    locked_tokens, source_negative = _handoff(session_id)
     variant_line = f"Variant: {flags['variant']}\n" if flags.get("variant") else ""
     user_content = (
         f"Revise the current {target.label} prompt according to the revision instruction. "
@@ -613,7 +582,6 @@ def _image_refinement(body: dict[str, Any], mode: str, flags: dict[str, Any]) ->
         + (f"Original brief:\n{brief}\n\n" if brief else "")
         + f"Current prompt:\n{current_prompt}\n\n"
         f"Revision instruction:\n{instruction}\n\n"
-        f"{_handoff_block(locked_tokens, source_negative)}"
         + target.final_contract(mode, instruction, story=bool(flags.get("story")))
     )
     return {
@@ -629,7 +597,6 @@ def _image_refinement(body: dict[str, Any], mode: str, flags: dict[str, Any]) ->
             "media_manifest": manifest,
             "generic": doc,
             "goals": goals,
-            "locked_tokens": locked_tokens,
             **flags,
         },
         "media_inputs": [],

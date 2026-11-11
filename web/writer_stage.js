@@ -522,11 +522,8 @@ export function createWriterStage(host) {
 
   // ------------------------------------------------------------- actions
 
-  async function withBusy(label, work, { rethrow = false } = {}) {
-    if (busy) {
-      if (rethrow) throw new Error("The writer is busy.");
-      return;
-    }
+  async function withBusy(label, work) {
+    if (busy) return;
     busy = true;
     syncBusy();
     host.setStatus(label);
@@ -534,7 +531,6 @@ export function createWriterStage(host) {
       return await work();
     } catch (error) {
       host.notifyError(error);
-      if (rethrow) throw error;
       return null;
     } finally {
       busy = false;
@@ -596,9 +592,8 @@ export function createWriterStage(host) {
     if (Object.keys(patch).length) await persistInputs(patch);
   }
 
-  /** `rethrow` is for callers that must know it failed (the handoff autostart). */
-  async function build({ rethrow = false } = {}) {
-    return withBusy("Building the generic prompt", async () => {
+  async function build() {
+    await withBusy("Building the generic prompt", async () => {
       const payload = await buildGeneric({
         ...host.inferencePayload(),
         session_id: host.sessionId(),
@@ -609,8 +604,7 @@ export function createWriterStage(host) {
       host.notify("Generic prompt ready", changed
         ? `${changed} field${changed > 1 ? "s" : ""} set. Steer it in the conversation, then pick a model on the right.`
         : "No fields changed.");
-      return payload;
-    }, { rethrow });
+    });
   }
 
   async function send() {
@@ -1074,8 +1068,6 @@ export function createWriterStage(host) {
     refresh: async () => applySession(await getSession(host.sessionId())),
     /** Clear scope: "prompts" keeps what you supplied, "all" is Reset. */
     clear: (options) => reset(options),
-    /** Build the generic prompt from the brief (the handoff's autostart uses it). */
-    build,
     /** Write the brief from one attached image (double-click on its card). */
     describe,
     /** Write the brief from every attached image, in order. */

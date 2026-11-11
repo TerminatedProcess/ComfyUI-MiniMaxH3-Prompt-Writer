@@ -31,8 +31,6 @@ from .system_prompts import SystemPromptError, system_prompt_for_mode
 from .version import VERSION
 from .sequence_routes import register_sequence_routes
 from .generic_routes import register_generic_routes
-from .external_routes import register_external_routes
-from .fleet_gate import GATE as FLEET_GATE, LOCAL_FAMILIES as FLEET_LOCAL_FAMILIES
 from . import goals as goal_ledger, prompt_audit, session_store
 from .targets import TargetError, generation_modes, guide_ids_for_mode, profile_for_mode
 
@@ -421,18 +419,6 @@ async def _prepare_generation_runtime(
     backend = BACKENDS.get(model["family"])
     if backend is None:
         raise ModelError("MODEL_BACKEND_UNAVAILABLE", "The selected model backend is not connected yet.")
-    if model["family"] in FLEET_LOCAL_FAMILIES:
-        # Never load a local model over a render in progress; see fleet_gate.
-        # A no-op unless H3_FLEET_GATE=1, and a cheap probe once the preset is up.
-        def _cancelled() -> bool:
-            with STATE_LOCK:
-                return bool(STATE.get("cancel_requested"))
-
-        await FLEET_GATE.acquire(str(body.get("session_id") or "") or None, _cancelled)
-    with STATE_LOCK:
-        # Which session the active request belongs to, so a handoff's status
-        # does not report "running" for someone else's compile.
-        STATE["active_session_id"] = str(body.get("session_id") or "") or None
 
     cancel_requested, pending_unload_family, pending_unload_model_id, pending_unload_endpoint = _set_active_model(request_id, model)
     backend.prepare_request()
@@ -896,7 +882,6 @@ async def generate(request: web.Request) -> web.Response:
 
 @routes.post(f"{ROUTE_PREFIX}/cancel")
 async def cancel(_request: web.Request) -> web.Response:
-    FLEET_GATE.decide("cancel")
     with STATE_LOCK:
         if STATE["active_request_id"] is None:
             return web.json_response({"cancelled": False, "reason": "idle"})
@@ -1515,4 +1500,3 @@ async def order_media_subjects(request: web.Request) -> web.Response:
 
 register_sequence_routes(routes, sys.modules[__name__])
 register_generic_routes(routes, sys.modules[__name__])
-register_external_routes(routes, sys.modules[__name__])

@@ -105,17 +105,6 @@ export function saveModeDrafts(storage, drafts) {
  * the server had faithfully persisted was simply addressed to a session nobody
  * asked for again. Reset is what clears a session; F5 is not.
  */
-/** A session handed over by another app: `?session=<uuid>` wins and becomes current.
- *
- *  Stored like any other session id, so a reload (and every later visit) stays
- *  on it rather than snapping back to whatever this browser had before. */
-export function sessionIdFromUrl(search = globalThis.location?.search || "", storage = globalThis.localStorage) {
-  const value = new URLSearchParams(search).get("session") || "";
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) return null;
-  try { storage?.setItem(SESSION_ID_STORAGE_KEY, value); } catch {}
-  return value;
-}
-
 export function loadSessionId(storage = globalThis.localStorage, mint = () => "") {
   const stored = storage?.getItem(SESSION_ID_STORAGE_KEY);
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(stored || "")) return stored;

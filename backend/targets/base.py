@@ -134,31 +134,6 @@ def strip_fence(text: str) -> str:
     return match.group(1).strip() if match else value
 
 
-_NEGATIVE_LABEL = re.compile(r"(?im)^\s*\**\s*negative(?:\s+prompt)?\s*\**\s*:")
-
-
-def restore_locked_tokens(assembled: dict[str, Any], text: str) -> str:
-    """Put back any caller-locked token the model dropped, verbatim.
-
-    LoRA trigger words, `<lora:...>` and embedding tokens are not facts the
-    model can paraphrase: one changed character and the LoRA silently stops
-    firing. So they are never left to the repair loop -- a missing one is
-    appended to the end of the positive prompt (before a `Negative:` line when
-    the target writes one). Deterministic, and it never touches existing text.
-    """
-    tokens = [str(token) for token in (assembled.get("input") or {}).get("locked_tokens") or [] if str(token).strip()]
-    missing = [token for token in tokens if token not in text]
-    if not missing:
-        return text
-    negative = _NEGATIVE_LABEL.search(text)
-    head = text if negative is None else text[: negative.start()]
-    tail = "" if negative is None else text[negative.start():]
-    head = head.rstrip()
-    joined = ", ".join(missing)
-    head = f"{head.rstrip(',')}, {joined}" if head else joined
-    return f"{head}\n{tail}" if tail else head
-
-
 def compose(base: str, *, remove: tuple[str, ...] = (), add: tuple[str, ...] = ()) -> str:
     """Assemble a system prompt from a base contract plus flag-driven edits.
 

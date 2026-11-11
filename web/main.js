@@ -8,8 +8,6 @@ import { createWriterStage } from "./writer_stage.js";
 import { createMediaZoom } from "./media_zoom.js";
 import { generateSequence, cancelSequence } from "./api/sequence.js";
 import { app } from "/scripts/app.js";
-import { api } from "/scripts/api.js";
-import { bannerMarkup as gateBannerMarkup, createHandoff, takeAutostart } from "./handoff.js";
 import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getMediaManifest, getModels, getOllamaStatus, getStatus, getSystemPrompt, orderMediaSubjects, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, setMediaSubject, unloadModel, uploadMedia } from "./api/h3studio.js";
 import { comfyVramIsAlreadyEmpty, createSessionId, fileCountFromDataTransfer, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replacementTargetForFileDrop, replaceEventListener, vramReleaseReachedTarget } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
@@ -29,7 +27,6 @@ import {
   loadOllamaModel,
   loadOllamaHost,
   loadSessionId,
-  sessionIdFromUrl,
   loadUserPreferences,
   normalizeOllamaHost,
   saveApiProviderConfig,
@@ -3130,22 +3127,6 @@ async function connectExternalServer(form) {
   }
 }
 
-/** Connect and select an OpenAI-shaped llama.cpp endpoint by URL (handoff autostart).
- *  Saved like a manual Connect, so the next visit reconnects on its own. Throws on failure. */
-async function connectExternalUrl(url) {
-  studio.modelSelectionRevision = (studio.modelSelectionRevision || 0) + 1;
-  studio.externalConnectionAttempt = (studio.externalConnectionAttempt || 0) + 1;
-  const result = await probeExternalServer({ url, model: "" });
-  const saved = { url: result.model.endpoint, model: result.model.remote_model };
-  studio.externalServerConfig = saved;
-  studio.externalServerError = null;
-  studio.externalModel = result.model;
-  saveExternalServerConfig(localStorage, saved);
-  studio.models = [...studio.models.filter((model) => model.family !== "external"), result.model];
-  selectModel(result.model);
-  return result.model;
-}
-
 function disconnectExternalServer() {
   studio.externalConnectionAttempt = (studio.externalConnectionAttempt || 0) + 1;
   const wasSelected = studio.selectedModel?.family === "external";
@@ -3926,11 +3907,10 @@ function createStudio() {
       <div class="h3ps-other-models-catalog" data-other-models-catalog></div>
     </section>
 
-    ${gateBannerMarkup()}
     <div class="h3ps-toast" role="status" aria-live="polite" aria-atomic="true" data-h3ps-toast><span class="h3ps-toast-icon">${icon("info", 17)}</span><span><strong data-toast-title>Notice</strong><span data-toast-message></span><button type="button" class="h3ps-toast-action" data-toast-action hidden></button><details data-toast-details hidden><summary>Technical details</summary><pre></pre></details></span></div>`;
   document.body.appendChild(root);
 
-  studio = { root, ...createStudioState({ sessionId: sessionIdFromUrl(location.search, localStorage) || loadSessionId(localStorage, createSessionId), storage: localStorage }) };
+  studio = { root, ...createStudioState({ sessionId: loadSessionId(localStorage, createSessionId), storage: localStorage }) };
   root.querySelector("[data-comfy-memory-action]").hidden = !HOST_CAPABILITIES.comfyMemory;
   if (!HOST_CAPABILITIES.windowed) {
     studio.fullscreen = true;
@@ -4628,38 +4608,13 @@ function createStudio() {
   setMusicSystemPromptProfile(studio.musicSystemPromptProfile);
   refreshModels();
   restoreSessionMedia();
-  const autostart = takeAutostart();
-  studio.handoff = createHandoff({
-    root,
-    fetchApi: (...args) => api.fetchApi(...args),
-    isBusy: () => Boolean(studio?.requestBusy || studio?.stage?.busy?.()),
-    onError: (title, message) => showToast(title, message),
-  });
-  const stageReady = studio.stage.start().catch((error) => {
+  studio.stage.start().catch((error) => {
     // The stage is the whole two-pane flow; if it cannot load, say so rather
     // than leaving the panes half-rendered and silent.
     studio.stage = null;
     syncWorkspace();
     showToast("Writer stage unavailable", error.message || String(error));
   });
-  // A registry means the stage came up; a failed start resolves undefined.
-  stageReady.then((registry) => registry && autostart && studio.handoff.autostart({
-    sessionId: studio.sessionId,
-    session: studio.stage?.session(),
-    refreshModels,
-    connectLlm: connectExternalUrl,
-    selectMode: (mode) => {
-      if (mode === studio.mode) return;
-      studio.mode = mode;
-      if (mode !== "Music3") studio.lastVideoMode = mode;
-      syncWorkspace();
-      renderMedia(studio.mode);
-      studio.stage?.render();
-    },
-    build: () => studio.stage.build({ rethrow: true }),
-    compile: startGenerationPreview,
-    hasModel: () => Boolean(studio.selectedModel?.runtime_ready),
-  })).catch((error) => showToast("Handoff failed", error.message || String(error)));
   return studio;
 }
 
